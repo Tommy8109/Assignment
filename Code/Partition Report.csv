@@ -1,0 +1,15 @@
+Number|type|Start|Sectors
+1|Primary Table (#0)|0|1
+
+Number|type|Start|Sectors
+2|Unallocated|0|128
+
+Number|type|Start|Sectors
+3|NTFS / exFAT (0x07)|128|245760
+
+Number|type|Start|Sectors
+4|Win95 FAT32 (0x0c)|245888|280576
+
+Number|type|Start|Sectors
+5|Unallocated|526464|6016
+

@@ -1,5 +1,5 @@
 import pytsk3
-import re
+from datetime import datetime
 from Reports import MakeReport
 from Exif_reader import ExifTags
 from Hash_verify import HashVerify
@@ -8,14 +8,19 @@ from Hash_verify import HashVerify
 class Decode():
     def __init__(self):
         """Creating the disk image variable which is equivalent to f=open()"""
-        self.diskimage = pytsk3.Img_Info("DiskImage.001")
+        self.diskimage = pytsk3.Img_Info("Session2_Image.001")
         self.volume_info = pytsk3.Volume_Info(self.diskimage)
         self.start_offsets = []
+
         self.report_partition = "Partition Report.csv"
         self.report_fs = "FS Report.csv"
+        self.report_files = "Found file report.csv"
+
         self.chosen_offset = ""
         self.file_pattern = r"(?P<Name>\w+)\.(?P<Extension>\w+)"
         self.img_formats = ["JPEG", "JPG", "PNG", "GIF", "TIFF", "PSD"]
+        self.file_list = []
+        self.file_count = int
 
     def general_info(self):
         """
@@ -92,6 +97,7 @@ class Decode():
                 print(f"File system endian order: {fs_info.info.endian}")
                 print(f"Metadata records available: {fs_info.info.inum_count}")
                 print(f"File system flags: {fs_info.info.flags}")
+                print(f"Root inum: {fs_info.info.root_inum}")
                 print("")
                 report = MakeReport()
                 report.file_sys_report(fs_type, fs_info.info.block_count, fs_info.info.block_size,
@@ -109,87 +115,59 @@ class Decode():
         if prompt.lower() == "yes":
             self.fs_first_menu()
 
-    def dir_analysis(self, offset, dirname):
+    def root_analysis(self, offset):
+        fs_info = pytsk3.FS_Info(self.diskimage, offset)
+        root_dir = fs_info.open_dir(inode=fs_info.info.root_inum)
+        for file in root_dir:
+            if file.info.meta != None:
+                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                    file_type_str = "Dir"
+                else:
+                    file_type_str = 'File'
+
+            ascii_name = file.info.name.name.decode("ascii")
+            print(ascii_name)
+            self.file_list.append(ascii_name)
+
+    def file_analysis(self, offset):
         partition = pytsk3.FS_Info(self.diskimage, offset)
-        for file in dirname:
-            try:
-                file_obj = partition.open(file)
-                file_meta = file_obj.info.meta
-                file_name = file_obj.info.name
-
-                print(f"Name: {file_name.name}")
-                print(f"File type: {file_name.type}")
-                print(f"Metadata record number: {file_meta.addr}")
-                print(f"Last access time: {file_meta.atime}")
-                print(f"Creation time: {file_meta.crtime}")
-                print(f"Last modified time: {file_meta.mtime}")
-                print(f"Metadata change time: {file_meta.ctime}")
-                print(f"Owner group ID: {file_meta.gid}")
-                print(f"Size in bytes: {file_meta.size}")
-
-            except:
-                print("No files found")
-
-    def file_analysis(self, offset, filename):
-        regex = re.compile(self.file_pattern)
-        m = regex.search(filename)
-        if m is not None:
-            extension = m.group(2)
-            for ext in self.img_formats:
-                if extension.lower() == ext.lower():
-                    image_file = True
-                else:
-                    image_file = False
-
-        else:
-            image_file = False
-
-        if image_file is False:
-            try:
-                partition = pytsk3.FS_Info(self.diskimage, offset)
-                file_obj = partition.open(filename)
-                file_meta = file_obj.info.meta
-                file_name = file_obj.info.name
-
-                print(f"Name: {file_name.name}")
-                print(f"File type: {file_name.type}")
-                print(f"Metadata record number: {file_meta.addr}")
-                print(f"Last access time: {file_meta.atime}")
-                print(f"Creation time: {file_meta.crtime}")
-                print(f"Last modified time: {file_meta.mtime}")
-                print(f"Metadata change time: {file_meta.ctime}")
-                print(f"Owner group ID: {file_meta.gid}")
-                print(f"Size in bytes: {file_meta.size}")
-                if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
-                    print("Deleted status: Deleted")
-                else:
-                    print("Deleted status: Not deleted")
-
-            except:
-                print("File not found...")
-                self.fs_second_menu(self.chosen_offset)
-
-        else:
-            partition = pytsk3.FS_Info(self.diskimage, offset)
-            file_obj = partition.open(filename)
+        deleted_count = 0
+        for file in self.file_list:
+            file_obj = partition.open(file)
             file_meta = file_obj.info.meta
             file_name = file_obj.info.name
+            self.file_count = len(self.file_list)
+
+            acc_time = datetime.utcfromtimestamp(file_meta.atime)
+            crt_time = datetime.utcfromtimestamp(file_meta.crtime)
+            meta_time = datetime.utcfromtimestamp(file_meta.ctime)
+            mod_time = datetime.utcfromtimestamp(file_meta.mtime)
 
             print(f"Name: {file_name.name}")
             print(f"File type: {file_name.type}")
             print(f"Metadata record number: {file_meta.addr}")
-            print(f"Last access time: {file_meta.atime}")
-            print(f"Creation time: {file_meta.crtime}")
-            print(f"Last modified time: {file_meta.mtime}")
-            print(f"Metadata change time: {file_meta.ctime}")
+            print(f"Last access time: {acc_time}")
+            print(f"Creation time: {crt_time}")
+            print(f"Last modified time: {mod_time}")
+            print(f"Metadata change time: {meta_time}")
             print(f"Owner group ID: {file_meta.gid}")
             print(f"Size in bytes: {file_meta.size}")
+            if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
+                print("Deleted status: Deleted")
+                deleted_count += 0
+                status = "Deleted"
+            else:
+                print("Deleted status: Not deleted")
+                status = "Not deleted"
             print("")
-            print("EXIF information...")
-            exif = ExifTags()
-            print(exif.read_gps_tags(filename))
-            print("")
-            print(exif.read_image_tags(filename))
+
+            report = MakeReport()
+            report.files_report(file_name.name, file_name.type, file_meta.addr, acc_time, crt_time, mod_time, meta_time,
+                                file_meta.gid, file_meta.size, status)
+
+        print(f"Total files analysed: {self.file_count}")
+        print(f"Deleted files found: {deleted_count}")
+        print("")
 
     def meta_analysis(self, offset, record):
         partition = pytsk3.FS_Info(self.diskimage, offset)
@@ -207,9 +185,13 @@ class Decode():
         for fs in self.start_offsets:
             print(f"{count}) File system at offset: {fs}")
             count += 1
+        print(f"{count})Back")
 
-        self.chosen_offset = input("Enter the number of the file system to view in depth...\n")
-        self.fs_second_menu(self.chosen_offset)
+        self.chosen_offset = int(input("Enter the offset of the file system to view in depth...\n"))
+        if self.chosen_offset == count:
+            self.main_menu()
+        else:
+            self.fs_second_menu(self.chosen_offset)
 
     def fs_second_menu(self, offset):
         """
@@ -219,21 +201,21 @@ class Decode():
         while True:
             print("Options")
             print("-" * 10)
-            print("1) Analyse individual file")
+            print("1) Analyse files")
             print("2) Analyse Directory")
             print("3) Analyse metadata record")
             print("4) Previous menu")
 
             prompt = input("Select an option...\n")
             if prompt == "1":
-                filename = input("Enter the name of the specific file:\n")
-                self.file_analysis(filename, offset)
+                self.file_analysis(self.chosen_offset)
 
             elif prompt == "2":
-                self.dir_analysis(offset)
+                print("!Currently only analyses root!")
+                self.root_analysis(self.chosen_offset)
 
             elif prompt == "3":
-                record_num = input("Enter the number of the metadata record:\n")
+                record_num = int(input("Enter the number of the metadata record:\n"))
                 self.meta_analysis(offset, record_num)
 
             elif prompt == "4":
