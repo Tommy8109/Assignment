@@ -4,6 +4,8 @@ from Reports import MakeReport
 from Exif_reader import ExifTags
 import hashlib
 import os
+import re
+import sqlite3
 
 class Decode():
     def __init__(self):
@@ -371,28 +373,28 @@ class Decode():
         offset = 0
 
         print("")
-        while True:
-            bytes = 0
-            line = []
-            filecontents = file_obj.read_random(offset, file_size)
 
-            for b in filecontents:
-                bytes += 1
-                line.append(b)
+        bytes = 0
+        line = []
+        filecontents = file_obj.read_random(offset, file_size)
 
-                print("{0:0{1}x}".format(b, 2), end=" ")
+        for b in filecontents:
+            bytes += 1
+            line.append(b)
 
-                if bytes % 16 == 0:
-                    print("#", end="")
-                    for b2 in line:
-                        if (b2 >= 32) and (b2 <= 126):
-                            print(chr(b2), end="")
-                        else:
-                            print("*", end="")
-                    line = []
-                    print("")
+            print("{0:0{1}x}".format(b, 2), end=" ")
 
-            print("")
+            if bytes % 16 == 0:
+                print("#", end="")
+                for b2 in line:
+                    if (b2 >= 32) and (b2 <= 126):
+                        print(chr(b2), end="")
+                    else:
+                        print("*", end="")
+                line = []
+                print("")
+
+        print("")
 
     def manual_menu(self, offset):
         print("")
@@ -474,10 +476,12 @@ class Decode():
 
             prompt = input("Select an option...\n")
             if prompt == "1":
-                self.file_analysis(self.chosen_offset)
+                if len(self.file_list) is not None:
+                    self.file_analysis(self.chosen_offset)
+                else:
+                    print("Run option 2 first to populate known files...\n")
 
             elif prompt == "2":
-                print("!Currently only analyses root!")
                 self.root_analysis(self.chosen_offset)
 
             elif prompt == "3":
@@ -490,8 +494,11 @@ class Decode():
                 self.dir_analysis()
 
             elif prompt == "6":
-                file = input("Enter the file to analyse:\n")
-                self.specific_file(file)
+                if len(self.file_list) is not None:
+                    file = input("Enter the file to analyse:\n")
+                    self.specific_file(file)
+                else:
+                    print("Run option 2 first to populate known files...\n")6
 
             elif prompt == "7":
                 file = input("Enter the file to analyse:\n")
@@ -505,7 +512,6 @@ class Decode():
                 self.fs_first_menu()
                 break
 
-
     def main_menu(self):
         print("Select a file to analyse:")
         print("-"*10)
@@ -517,9 +523,15 @@ class Decode():
             else:
                 pass
 
-        self.chosen_file = input("File to analyse:\n")
-        self.diskimage = pytsk3.Img_Info(self.chosen_file)
-        self.volume_info = pytsk3.Volume_Info(self.diskimage)
+        while True:
+            self.chosen_file = input("File to analyse:\n")
+            try:
+                self.diskimage = pytsk3.Img_Info(self.chosen_file)
+                self.volume_info = pytsk3.Volume_Info(self.diskimage)
+                break
+            except:
+                print(f"Failed to open {self.chosen_file}, image does not exist")
+                print("")
 
         while True:
             print("Options")
@@ -542,7 +554,7 @@ class Decode():
 
             elif prompt == "4":
                 if len(self.start_offsets) == 0:
-                    print("Please run option 2 first to populate a start offset list...")
+                    print("Please run option 3 first to populate a start offset list...")
                 else:
                     self.file_sys_analysis()
 
