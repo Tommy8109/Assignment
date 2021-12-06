@@ -21,7 +21,7 @@ class MakeReport():
             linewriter = csv.writer(csvfile, delimiter='|',quotechar=chr(34), quoting=csv.QUOTE_MINIMAL)
             header = ["File sys", "Clusters", "Cluster size", "Endian", "Metadata", "Flags"]
             newline = ""
-            info = [fs, clusters, size, endian, meta], flags
+            info = [fs, clusters, size, endian, meta, flags]
             linewriter.writerow(header)
             linewriter.writerow(info)
             linewriter.writerow(newline)

@@ -2,24 +2,28 @@ import pytsk3
 from datetime import datetime
 from Reports import MakeReport
 from Exif_reader import ExifTags
-from Hash_verify import HashVerify
-
+from SigAnalyse import Analyse
+from menu_maker import Menus
+import hashlib
+import os
+import re
+import sqlite3
 
 class Decode():
     def __init__(self):
-        """Creating the disk image variable which is equivalent to f=open()"""
-        self.diskimage = pytsk3.Img_Info("Session2_Image.001")
-        self.volume_info = pytsk3.Volume_Info(self.diskimage)
+        self.diskimage = object
+        self.volume_info = object
         self.start_offsets = []
-
-        self.report_partition = "Partition Report.csv"
-        self.report_fs = "FS Report.csv"
-        self.report_files = "Found file report.csv"
+        self.fs_sizes = []
+        self.failed_fs = []
+        self.chosen_file = ""
 
         self.chosen_offset = ""
         self.file_pattern = r"(?P<Name>\w+)\.(?P<Extension>\w+)"
         self.img_formats = ["JPEG", "JPG", "PNG", "GIF", "TIFF", "PSD"]
         self.file_list = []
+        self.meta_records = []
+        self.dir_names = []
         self.file_count = int
 
     def general_info(self):
@@ -36,7 +40,7 @@ class Decode():
             else:
                 pass
 
-        print("File name: DiskImage.001")
+        print(f"File name: {self.chosen_file}")
         print(f"Image size in bytes: {byte_size}")
         print(f"Image size in MB: {round(byte_size/10000,2)}")
         print(f"Sector count: {round(byte_size/512,0)}")
@@ -67,6 +71,12 @@ class Decode():
             self.start_offsets.append(volume.start * 512)
             report = MakeReport()
             report.partition_report(count, volume.desc.decode("ascii"), volume.start, volume.len)
+
+    def image_exif(self, file):
+        print(f"{file} Image information:")
+        exif = ExifTags()
+        exif.read_image_tags(file)
+        exif.read_gps_tags(file)
 
     def file_sys_analysis(self):
         """
@@ -99,12 +109,15 @@ class Decode():
                 print(f"File system flags: {fs_info.info.flags}")
                 print(f"Root inum: {fs_info.info.root_inum}")
                 print("")
+                fs_size = fs_info.info.block_count + fs_info.info.block_size
+                self.fs_sizes.append(fs_size)
+
                 report = MakeReport()
                 report.file_sys_report(fs_type, fs_info.info.block_count, fs_info.info.block_size,
                                        fs_info.info.endian, fs_info.info.inum_count, fs_info.info.flags)
 
             except:
-                failed_offsets.append(partition_offset)
+                self.failed_fs.append(partition_offset)
                 count += 1
 
         print(f"Failed to decode {count} partitions at offsets: ")
@@ -118,16 +131,33 @@ class Decode():
     def root_analysis(self, offset):
         fs_info = pytsk3.FS_Info(self.diskimage, offset)
         root_dir = fs_info.open_dir(inode=fs_info.info.root_inum)
+        dir_count = 0
+        file_count = 0
+        file_in_dir = 0
         for file in root_dir:
             if file.info.meta != None:
                 if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                    file_type_str = "Dir"
+                    dir_count += 1
+                    file_in_dir += 1
+                    ascii_name = file.info.name.name.decode("ascii")
+                    self.dir_names.append(ascii_name)
                 else:
-                    file_type_str = 'File'
+                    file_count += 1
+                    ascii_name = file.info.name.name.decode("ascii")
+                    self.file_list.append(ascii_name)
 
-            ascii_name = file.info.name.name.decode("ascii")
-            print(ascii_name)
-            self.file_list.append(ascii_name)
+        print(f"Directories: {dir_count}   Files in directories {file_in_dir}    Root files: {file_count}")
+        print("-" * 80)
+        print("Directories found")
+        print("-"*20)
+        for dir in self.dir_names:
+            print(f"Directory found: {dir}")
+        print("")
+        print("Files found")
+        print("-" * 20)
+        for file in self.file_list:
+            print(f"File found: {file}")
+        print("")
 
     def file_analysis(self, offset):
         partition = pytsk3.FS_Info(self.diskimage, offset)
@@ -161,6 +191,8 @@ class Decode():
                 status = "Not deleted"
             print("")
 
+            self.meta_records.append(file_meta.addr)
+
             report = MakeReport()
             report.files_report(file_name.name, file_name.type, file_meta.addr, acc_time, crt_time, mod_time, meta_time,
                                 file_meta.gid, file_meta.size, status)
@@ -169,9 +201,246 @@ class Decode():
         print(f"Deleted files found: {deleted_count}")
         print("")
 
-    def meta_analysis(self, offset, record):
+    def meta_analysis(self, offset):
         partition = pytsk3.FS_Info(self.diskimage, offset)
-        partition.open_meta(record)
+        for record in self.meta_records:
+            print(record)
+
+    def dir_analysis(self):
+        count = 0
+        for dir in self.dir_names:
+            print(f"{count}) {dir}")
+            count += 1
+
+        select_dir = input("Select the directory to view:")
+        directory = "/" + select_dir
+        try:
+            fs_info = pytsk3.FS_Info(self.diskimage, self.chosen_offset)
+            directory = fs_info.open_dir(directory)
+        except:
+            print(f"Could not open directory {directory}")
+            self.fs_second_menu()
+
+        dir_count = 0
+        file_count = 0
+        file_in_dir = 0
+        for file in directory:
+            if file.info.meta != None:
+                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                    file_type_str = "Dir"
+                    dir_count += 1
+                    file_in_dir += 1
+                    ascii_name = file.info.name.name.decode("ascii")
+                    self.dir_names.append(ascii_name)
+                else:
+                    file_count += 1
+                    file_type_str = 'File'
+                    ascii_name = file.info.name.name.decode("ascii")
+                    self.file_list.append(ascii_name)
+
+        print(f"Sub directories: {dir_count}   Files in directories {file_in_dir}    Root files: {file_count}")
+        print("-" * 80)
+        print("Directories found")
+        print("-"*20)
+        for dir in self.dir_names:
+            print(f"Directory found: {dir}")
+        print("")
+        print("Files found")
+        print("-" * 20)
+        for file in self.file_list:
+            print(f"File found: {file}")
+        print("")
+
+        prompt = input("Restart with newly discovered directories?")
+        if prompt.lower() == "yes":
+            self.dir_analysis()
+        else:
+            pass
+
+    def file_sig(self):
+        fname = input("Enter the file to analyse:\n")
+        analyse = Analyse(fname,self.chosen_file, self.chosen_offset)
+        analyse.sig_find()
+        self.fs_second_menu()
+
+    def hash_compare(self, filename, user_hash):
+        partition = pytsk3.FS_Info(self.diskimage, self.chosen_offset)
+        file_obj = partition.open(filename)
+        file_meta = file_obj.info.meta
+        file_size = file_meta.size
+        chunk_size = 1024
+        offset = 0
+        md5_hash = hashlib.md5()
+
+        while file_size > 0:
+            data = file_obj.read_random(offset, min(chunk_size, file_size))
+            md5_hash.update(data)
+            offset +=  chunk_size
+            file_size -= chunk_size
+
+        print(f"{filename} has the MD5 hash of: {md5_hash.hexdigest()}")
+        if md5_hash.hexdigest().upper() == user_hash:
+            return True
+        else:
+            return False
+
+    def specific_file(self, filename):
+        partition = pytsk3.FS_Info(self.diskimage, self.chosen_offset)
+        deleted_count = 0
+        file_obj = partition.open(filename)
+        file_meta = file_obj.info.meta
+        file_name = file_obj.info.name
+
+        acc_time = datetime.utcfromtimestamp(file_meta.atime)
+        crt_time = datetime.utcfromtimestamp(file_meta.crtime)
+        meta_time = datetime.utcfromtimestamp(file_meta.ctime)
+        mod_time = datetime.utcfromtimestamp(file_meta.mtime)
+
+        print(f"Name: {file_name.name}")
+        print(f"File type: {file_name.type}")
+        print(f"Metadata record number: {file_meta.addr}")
+        print(f"Last access time: {acc_time}")
+        print(f"Creation time: {crt_time}")
+        print(f"Last modified time: {mod_time}")
+        print(f"Metadata change time: {meta_time}")
+        print(f"Owner group ID: {file_meta.gid}")
+        print(f"Size in bytes: {file_meta.size}")
+        if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
+            print("Deleted status: Deleted")
+            deleted_count += 0
+            status = "Deleted"
+        else:
+            print("Deleted status: Not deleted")
+            status = "Not deleted"
+
+        fname = filename.replace("/Magic_Folder/", "")
+        direct = filename.replace(fname,"")
+
+        analyse = Analyse(fname, self.chosen_file, self.chosen_offset)
+        analyse.spec_dir(direct)
+
+        print("")
+
+    def boot_view(self):
+        print("")
+        f = open("Session2_Image.001", "rb")
+        bytes = 0
+        line = []
+        filecontents = f.read(512)
+        for b in filecontents:
+            bytes += 1
+            line.append(b)
+
+            print("{0:0{1}x}".format(b, 2), end=" ")
+
+            if bytes % 16 == 0:
+                print("#", end="")
+                for b2 in line:
+                    if (b2 >= 32) and (b2 <= 126):
+                        print(chr(b2), end="")
+                    else:
+                        print("*", end="")
+                line = []
+                print("")
+
+        print("")
+
+    def fs_view(self, offset):
+        print("")
+        f = open(self.chosen_file, "rb")
+        while True:
+            f.seek(offset)
+            bytes = 0
+            line = []
+            filecontents = f.read(512)
+
+            for b in filecontents:
+                bytes += 1
+                line.append(b)
+
+                print("{0:0{1}x}".format(b, 2), end=" ")
+
+                if bytes % 16 == 0:
+                    print("#", end="")
+                    for b2 in line:
+                        if (b2 >= 32) and (b2 <= 126):
+                            print(chr(b2), end="")
+                        else:
+                            print("*", end="")
+                    line = []
+                    print("")
+            con_prompt = input("Continue?\n")
+            if con_prompt.lower() == "yes":
+                offset += 512
+            else:
+                break
+
+            print("")
+
+    def file_view(self, filename):
+        partition = pytsk3.FS_Info(self.diskimage, self.chosen_offset)
+        file_obj = partition.open(filename)
+        file_meta = file_obj.info.meta
+        file_size = file_meta.size
+        chunk_size = 1024
+        offset = 0
+
+        print("")
+
+        bytes = 0
+        line = []
+        filecontents = file_obj.read_random(offset, file_size)
+
+        for b in filecontents:
+            bytes += 1
+            line.append(b)
+
+            print("{0:0{1}x}".format(b, 2), end=" ")
+
+            if bytes % 16 == 0:
+                print("#", end="")
+                for b2 in line:
+                    if (b2 >= 32) and (b2 <= 126):
+                        print(chr(b2), end="")
+                    else:
+                        print("*", end="")
+                line = []
+                print("")
+
+        print("")
+
+    def manual_menu(self, offset):
+        print("")
+        f = open(self.chosen_file, "rb")
+        while True:
+            f.seek(offset)
+            bytes = 0
+            line = []
+            filecontents = f.read(512)
+
+            for b in filecontents:
+                bytes += 1
+                line.append(b)
+
+                print("{0:0{1}x}".format(b, 2), end=" ")
+
+                if bytes % 16 == 0:
+                    print("#", end="")
+                    for b2 in line:
+                        if (b2 >= 32) and (b2 <= 126):
+                            print(chr(b2), end="")
+                        else:
+                            print("*", end="")
+                    line = []
+                    print("")
+            con_prompt = input("Continue?\n")
+            if con_prompt.lower() == "yes":
+                offset += 512
+            else:
+                break
+
+            print("")
+        self.fs_first_menu()
 
     def fs_first_menu(self):
         """
@@ -190,60 +459,115 @@ class Decode():
         self.chosen_offset = int(input("Enter the offset of the file system to view in depth...\n"))
         if self.chosen_offset == count:
             self.main_menu()
+        for offset in self.failed_fs:
+            if self.chosen_offset == offset:
+                prompt = input("This file system can not be decoded automatically, view anyway?")
+                if prompt.lower() == "yes":
+                    self.manual_menu(self.chosen_offset)
+                else:
+                    self.fs_first_menu()
         else:
-            self.fs_second_menu(self.chosen_offset)
+            self.fs_second_menu()
 
-    def fs_second_menu(self, offset):
+    def fs_second_menu(self):
         """
         The second small menu to determine what information the user wants
         from the previously decided file system.
         """
         while True:
-            print("Options")
-            print("-" * 10)
-            print("1) Analyse files")
-            print("2) Analyse Directory")
-            print("3) Analyse metadata record")
-            print("4) Previous menu")
+            menu = Menus()
+            menu.type_file_sys()
 
             prompt = input("Select an option...\n")
             if prompt == "1":
-                self.file_analysis(self.chosen_offset)
+                if len(self.file_list) is not None:
+                    self.file_analysis(self.chosen_offset)
+                else:
+                    print("Run option 2 first to populate known files...\n")
 
             elif prompt == "2":
-                print("!Currently only analyses root!")
                 self.root_analysis(self.chosen_offset)
 
             elif prompt == "3":
-                record_num = int(input("Enter the number of the metadata record:\n"))
-                self.meta_analysis(offset, record_num)
+                self.meta_analysis(self.chosen_offset)
 
             elif prompt == "4":
+                self.fs_view(self.chosen_offset)
+
+            elif prompt == "5":
+                self.dir_analysis()
+
+            elif prompt == "6":
+                if len(self.file_list) is not None:
+                    file = input("Enter the file to analyse:\n")
+                    self.specific_file(file)
+                else:
+                    print("Run option 2 first to populate known files...\n")
+
+            elif prompt == "7":
+                file = input("Enter the file to analyse:\n")
+                self.image_exif(file)
+
+            elif prompt == "8":
+                file = input("Enter the files name:\n")
+                self.file_view(file)
+
+            elif prompt == "9":
+                self.file_sig()
+
+            elif prompt == "10":
                 self.fs_first_menu()
                 break
 
     def main_menu(self):
+        menu = Menus()
+        exts = [".raw", ".dd", ".001"]
+        menu.type_files(os.getcwd(), exts)
+
         while True:
-            print("Options")
-            print("_" * 10)
-            print("1) General information")
-            print("2) Decode partitions")
-            print("3) File system information")
-            print("4) Exit")
-            prompt = input("")
+            self.chosen_file = input("File to analyse:\n")
+            try:
+                self.diskimage = pytsk3.Img_Info(self.chosen_file)
+                self.volume_info = pytsk3.Volume_Info(self.diskimage)
+                break
+            except:
+                print(f"Failed to open {self.chosen_file}, image does not exist")
+                print("")
+
+        while True:
+            menu.type_main()
+            prompt = input("Enter a number\n")
             if prompt == "1":
                 self.general_info()
 
             elif prompt == "2":
-                self.partition_table()
+                self.boot_view()
 
             elif prompt == "3":
+                self.partition_table()
+
+            elif prompt == "4":
                 if len(self.start_offsets) == 0:
-                    print("Please run option 2 first to populate a start offset list...")
+                    print("Please run option 3 first to populate a start offset list...")
                 else:
                     self.file_sys_analysis()
 
-            elif prompt == "4":
+            elif prompt == "5":
+                if self.chosen_offset is None:
+                    print("No file system offsets known currently")
+                else:
+                    hash_prompt = input("Enter the hash:\n")
+                    filename = input("Enter the file to verify:\n")
+                    verify = self.hash_compare(filename, hash_prompt)
+
+                    if verify is True:
+                        print("Hashes match...")
+                        print("")
+                    else:
+                        print("Hashes do not match")
+                        print("")
+
+            elif prompt == "6":
                 quit()
 
             else:

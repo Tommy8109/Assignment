@@ -4,8 +4,8 @@ import exifread
 class ExifTags():
     def __init__(self):
         """Set up lists that include the useful EXIF tags for GPS tag data and Image tag data """
-        self.image_tags = ["Image Make", "Image Model", "Image Software", "Image DateTime"]
-        self.gps_tags = ["GPS GPSLatitudeRef", "GPS GPSLongitudeRef", "GPS GPSLatitude", "GPS GPSLongitude"]
+        self.__image_tags = ["Image Make", "Image Model", "Image Software", "Image DateTime"]
+        self.__gps_tags = ["GPS GPSLatitudeRef", "GPS GPSLongitudeRef", "GPS GPSLatitude", "GPS GPSLongitude"]
 
     def read_image_tags(self, filename):
         """
@@ -16,7 +16,7 @@ class ExifTags():
         f = open(filename, "rb")
         tags = exifread.process_file(f)
         for tag in tags.keys():
-            if tag in self.image_tags:
+            if tag in self.__image_tags:
                 print("%s: %s" % (tag, tags[tag]))
             else:
                 pass
@@ -30,7 +30,7 @@ class ExifTags():
         f = open(filename, "rb")
         tags = exifread.process_file(f)
         for tag in tags.keys():
-            if tag in self.gps_tags:
+            if tag in self.__gps_tags:
                 print("%s: %s" % (tag, tags[tag]))
             else:
                 pass
@@ -48,3 +48,4 @@ class ExifTags():
                 print("%s: %s" % (tag, tags[tag]))
             else:
                 pass
+
