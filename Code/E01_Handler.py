@@ -1,16 +1,11 @@
 import pytsk3
 import pyewf
 
-diskimage = pytsk3.Img_Info("Washer 17.E01")
-
 
 class E01Handler(pytsk3.Img_Info):
     def __init__(self, ewf_handle):
         self._ewf_handle = ewf_handle
-        self.casenum = ""
-        self.evidencenum = ""
-        self.examinername = ""
-        self.aquisitionhash = ""
+        self.InfoList = []
         super(E01Handler, self).__init__(url="", type=pytsk3.TSK_IMG_TYPE_EXTERNAL)
         # This super call is doing the same as (diskimage = pytsk3.Img_Info("Washer 17.E01"))
 
@@ -26,9 +21,9 @@ class E01Handler(pytsk3.Img_Info):
 
     def case_info(self, forensic_image):
         header_values = forensic_image.get_header_values()
-        self.casenum = header_values['case_number']
-        self.evidencenum = header_values['evidence_number']
-        self.examinername = header_values['examiner_name']
-        self.aquisitionhash = forensic_image.get_hash_values()
+        self.InfoList.append(header_values['case_number'])
+        self.InfoList.append(header_values['evidence_number'])
+        self.InfoList.append(header_values['examiner_name'])
+        self.InfoList.append(forensic_image.get_hash_values())
 
-
+        return self.InfoList

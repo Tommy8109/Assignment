@@ -48,14 +48,12 @@ class Analyse():
                             sig_match = file_sig_regex.search(file_bytes.decode('latin-1'))
 
                             if sig_match is not None:
-                                print("File extension signature match")
+                                return True
                             else:
-                                print("File extension and signature do not match. File may have been renamed")
-
+                                return False
                         else:
                             print(
                                 f'File {fs_obj.info.name.name.decode("ascii")} does not have an extension')
-
 
     def spec_dir(self, dir):
         file_sys = pytsk3.FS_Info(self.disk_image, self.offset)
@@ -91,9 +89,9 @@ class Analyse():
                             sig_match = file_sig_regex.search(file_bytes.decode('latin-1'))
 
                             if sig_match is not None:
-                                print("File extension signature match")
+                                return True
                             else:
-                                print("File extension and signature do not match. File may have been renamed")
+                                return False
 
                         else:
                             print(
