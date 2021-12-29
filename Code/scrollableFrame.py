@@ -8,8 +8,7 @@ class ScrollableFrame(tk.Frame):
     Class - ScrollableFrame
     *******************************************************************************************************
     description:
-        The scrollable frame class is used to set up a scrollable tkinter frame that is used when printing
-        customer details in the gui system.
+        The scrollable frame class is used to set up a scrollable tkinter frame
         This scrollable frame was taken and then modified from here:
         Scrollable Frames in Tkinter - Jose Salvatierra - https://blog.tecladocode.com/tkinter-scrollable-frames/
       

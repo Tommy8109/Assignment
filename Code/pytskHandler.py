@@ -3,9 +3,11 @@ import pytsk3
 import pyewf
 from E01_Handler import E01Handler
 from RegistryAnalyse import RegGet
+from SigAnalyse import Analyse
 import os
 from datetime import datetime
 import hashlib
+import re
 
 
 class PytskInfo():
@@ -18,6 +20,7 @@ class PytskInfo():
             self.img_info = E01Handler(self.ewf_handle)
             self.vol_info = pytsk3.Volume_Info(self.img_info)
             self.file = file
+
         else:
             self.IsE01 = False
             self.img_info = pytsk3.Img_Info(file)
@@ -26,6 +29,7 @@ class PytskInfo():
 
         self.connection = object
         self.cursor = object
+        self.IsE01 = bool
         self.LogDirectory = ""
         self.start_offsets = []
         self.failed_fs = []
@@ -35,6 +39,11 @@ class PytskInfo():
         self.files = []
         self.root_files = []
         self.root_dirs = []
+
+        self.ext_pattern = r"(\.)(.*)"
+        self.db_pattern = r"(\(')(\w*)(',')([a-f0-9]*)(',')(\w*)"
+        self.extension = ""
+        self.fs_sig = ""
 
     def sql_setup(self):
         try:
@@ -92,6 +101,7 @@ class PytskInfo():
 
         rootMeta_command = """
         CREATE TABLE RootMeta (
+        Offset INTEGER,
         Name VARCHAR, 
         Type VARCHAR, 
         MetaRecordNum INTEGER,
@@ -108,8 +118,13 @@ class PytskInfo():
         CREATE TABLE FileHashes (
         FileSys TEXT,
         FileName TEXT,
-        Match TEXT,
         Hash VARCHAR);"""
+
+        sig_command = """
+        CREATE TABLE FileSignatures (
+        FileSys TEXT,
+        FileName TEXT,
+        Match TEXT);"""
 
         self.cursor.execute(part_command)
         self.cursor.execute(filesys_command)
@@ -117,6 +132,7 @@ class PytskInfo():
         self.cursor.execute(rootMeta_command)
         self.cursor.execute(basic_command)
         self.cursor.execute(hash_command)
+        self.cursor.execute(sig_command)
 
     def basic_info(self):
         size = self.img_info.get_size()
@@ -129,7 +145,6 @@ class PytskInfo():
         sectors = size/512
         allocated = (size/512)-unallocated
         unallocated = unallocated/512
-        na = "N/A"
 
         if self.IsE01 is True:
             ls = self.img_info.case_info(self.ewf_handle)
@@ -340,10 +355,10 @@ class PytskInfo():
                                         deleted = "No"
 
                                     sql_command = """
-                                    INSERT INTO RootMeta (Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?);"""
+                                    INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?);"""
 
-                                    data_tuple = (ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
+                                    data_tuple = (offset,ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
 
                                     self.cursor.execute(sql_command, data_tuple)
                                     self.connection.commit()
@@ -367,15 +382,15 @@ class PytskInfo():
                             deleted = "No"
 
                         sql_command = """
-                               INSERT INTO RootMeta (Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?);"""
+                               INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?);"""
 
-                        data_tuple = (ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
+                        data_tuple = (offset,ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
 
                         self.cursor.execute(sql_command, data_tuple)
                         self.connection.commit()
 
-    def hash_files(self, user_hash):
+    def hash_files(self):
         for offset in self.working_offsets:
             fs_info = pytsk3.FS_Info(self.img_info, offset)
             root = fs_info.open_dir(inode=fs_info.info.root_inum)
@@ -406,16 +421,11 @@ class PytskInfo():
 
                                     hashVal = md5_hash.hexdigest().upper()
 
-                                    if md5_hash.hexdigest().upper() == user_hash:
-                                        match = "Yes"
-                                    else:
-                                        match = "No"
-
                                     sql_command = """
-                                       INSERT INTO FileHashes (Filesys, FileName, Hash, Match)
-                                       VALUES (?,?,?,?);"""
+                                       INSERT INTO FileHashes (Filesys, FileName, Hash)
+                                       VALUES (?,?,?);"""
 
-                                    data_tuple = (offset, ascii_name, str(hashVal), match)
+                                    data_tuple = (offset, ascii_name, str(hashVal))
 
                                     self.cursor.execute(sql_command, data_tuple)
                                     self.connection.commit()
@@ -436,16 +446,11 @@ class PytskInfo():
 
                         hashVal = md5_hash.hexdigest().upper()
 
-                        if md5_hash.hexdigest().upper() == user_hash:
-                            match = "Yes"
-                        else:
-                            match = "No"
-
                         sql_command = """
-                           INSERT INTO FileHashes (Filesys, FileName, Hash, Match)
-                           VALUES (?,?,?,?);"""
+                           INSERT INTO FileHashes (Filesys, FileName, Hash)
+                           VALUES (?,?,?);"""
 
-                        data_tuple = (offset, ascii_name, str(hashVal), match)
+                        data_tuple = (offset, ascii_name, str(hashVal))
 
                         self.cursor.execute(sql_command, data_tuple)
                         self.connection.commit()
@@ -457,3 +462,8 @@ class PytskInfo():
         self.file_systems()
         self.all_file_analysis()
         self.all_meta()
+        self.hash_files()
+
+
+c = PytskInfo("Session2_Image.001", "001")
+c.main()

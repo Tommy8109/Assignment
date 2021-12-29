@@ -1,7 +1,6 @@
 """All of the imports necessary for the programs functionality"""
 import sqlite3
-
-import pyewf
+import time
 import pytsk3
 from datetime import datetime
 from Exif_reader import ExifTags
@@ -10,6 +9,7 @@ from Hash_verify import HashVerify
 import os
 from tkinter import *
 from tkinter import ttk
+from tkinter.ttk import *
 from tkinter import messagebox
 from scrollableFrame import ScrollableFrame
 import re
@@ -61,21 +61,22 @@ class ForensicGui():
         self.__PhotoScreenFirst = "PhotoViewerFirst.png"
         self.__PhotoScreenSecond = "PhotoViewerSecond.png"
         self.__FilesScreenType = "FileCarveType.png"
+        self.__LoadScreenFile = "LoadScreen.png"
 
         self.__MainWindow = Tk()
         self.__title = "APDF FORENSIC TOOL"
         self.__screen_geometry = "1920x1080"
         self.CurrentFrame = None
 
-
         self.IsE01 = bool
         self.db_exists = False
         self.diskimage = object
-        self.vol_info = object
         self.img_info = object
         self.tsk_handle = object
         self.file_count = int
 
+        self.root_files = []
+        self.root_directories = []
         self.ForensicFiles = []
         self.startoffsets = []
         self.fs_sizes = []
@@ -209,11 +210,49 @@ class ForensicGui():
 
         entryFile = ttk.Entry(firstScreen, textvariable=self.ChosenFile, width=60)
         entryFile.place(x=755, y=458)
-        btnContinue = ttk.Button(firstScreen, text=" Analyse ", command=self.MainScreen)
+
+        btnContinue = ttk.Button(firstScreen, text=" Analyse ", command=self.LoadingScreen)
         btnContinue.place(x=755, y=510)
 
         firstScreen.option_add('*tearOff', False)
         firstScreen.mainloop()
+
+    def LoadingScreen(self):
+        self.ClearWindow()
+        ProcessScreen = self.__MainWindow
+        ProcessScreen.title(self.__title)
+        ProcessScreen.geometry(self.__screen_geometry)
+
+        ProcessScreen.attributes("-topmost", False)
+        ProcessScreen.resizable(False, False)
+        background = ttk.Label(ProcessScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__LoadScreenFile, master=ProcessScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        progress = Progressbar(ProcessScreen, orient=HORIZONTAL, length=200, mode='determinate')
+        progress.place(x=700, y=250)
+
+        xcord = 700
+        ycord = 375
+        bar_value = 20
+
+        LoadText = ["Discovering Partitions", "Discovering File systems", "Analysing root directories",
+                    "Analysing file metadata", "Calculating hash values", "Done!"]
+
+        for text in LoadText:
+            time.sleep(1)
+            Label(ProcessScreen, text=text, background="#D9D9D9", font=("Roboto", 20)).place(x=xcord, y=ycord)
+            progress['value'] = bar_value
+            bar_value += 20
+            ycord += 50
+            ProcessScreen.update_idletasks()
+            time.sleep(2)
+
+        self.MainScreen()
 
     def MainScreen(self):
         """
@@ -231,6 +270,7 @@ class ForensicGui():
         The functions of the program are listed via Tkinter's menubars, seen on lines
         222-259.
         """
+
         if self.db_exists is False:
             pattern = r"(?P<name>.+)\.(.{2})"
             regex = re.compile(pattern)
@@ -315,7 +355,7 @@ class ForensicGui():
         FSMenu.add_command(label='Decode', command=self.file_sys_decode)
         FSMenu.add_command(label='Boot view')
 
-        FileMenu.add_command(label='Analyse root', command=self.root_test)
+        FileMenu.add_command(label='Analyse root', command=self.root_analyse)
         FileMenu.add_command(label='All file metadata', command=self.AllFileMeta)
         FileMenu.add_command(label='Specific file', command=self.specific_file)
         FileMenu.add_command(label='Specific directory', command=self.Get_Specific_dir)
@@ -570,7 +610,13 @@ class ForensicGui():
         btnHelp = ttk.Button(FSScreen, text=' Whats this? ', command=partial(self.display_msg, "FSScreen"))
         btnHelp.place(x=1777, y=15)
 
-    def root_test(self):
+        entryOffset = ttk.Entry(FSScreen, textvariable=self.chosenOffset)
+        entryOffset.place(x=20, y=900)
+
+        btnSet = ttk.Button(FSScreen, text="Set offset", command=self.MainScreen)
+        btnSet.place(x=20, y=930)
+
+    def root_analyse(self):
         self.ClearWindow()
         rootScreen = self.__MainWindow
         rootScreen.title(self.__title)
@@ -586,142 +632,35 @@ class ForensicGui():
         background.img = logo
         background.config(image=background.img)
 
-        root_directories = []
-        root_files = []
+        self.root_directories = []
+        self.root_files = []
 
         connection = sqlite3.connect("APDF Log\\APDF report.db")
         cursor = connection.cursor()
 
-        qry_total_row = f"""SELECT FileSys FROM RootDirectory WHERE FileSys={self.chosenOffset.get()}"""
-        cursor.execute(qry_total_row)
-        result = cursor.fetchall()
-        total_rows = len(result)
-
-        for file in range(total_rows):
-            qry_FileName = f"""SELECT Name From RootDirectory WHERE FileSys={self.chosenOffset.get()} AND FoundIn
-            =Root AND Type=File """
-
-            cursor.execute(qry_FileName)
-            root_files.append(cursor.fetchall())
-
-        for directory in range(total_rows):
-            qry_dirs = f"""SELECT Name From RootDirectory WHERE FileSys={self.chosenOffset.get()} AND FoundIn
-            =Root AND Type=Directory"""
-            cursor.execute(qry_dirs)
-            root_directories.append(cursor.fetchall())
-
-        root = self.__MainWindow
-        frame = ScrollableFrame(700, 682, root)
-        self.CurrentFrame = frame
-        sCanvas = frame.getCanvas()
-
-        rowPos = 90
-        colPos = 5
-        lineHeight = 25
-        colFile = colPos
-
-        textFileName = colFile + 10
-
-        for file in root_files:
-            sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
-                                text=file)
-            rowPos = rowPos + lineHeight
-
-        root = self.__MainWindow
-        frame = ScrollableFrame(780, 682, root)
-        self.CurrentFrame = frame
-        sCanvas = frame.getCanvas()
-
-        rowPos = 90
-        colPos = 5
-        lineHeight = 25
-        colFile = colPos
-
-        textFileName = colFile + 10
-
-        for dir in root_directories:
-            sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
-                                text=dir)
-            rowPos = rowPos + lineHeight
-
-        btnHelp = ttk.Button(rootScreen, text=' Whats this? ', command=partial(self.display_msg, "rootScreen"))
-        btnHelp.place(x=1777, y=15)
-
-        lblChosenFS = ttk.Label(rootScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
-        lblChosenFS.place(x=102, y=210)
-
-        lblFileCount = ttk.Label(rootScreen, text=len(self.file_list), background="#D9D9D9", font=("Roboto", 26))
-        lblDirCount = ttk.Label(rootScreen, text=len(self.dir_names), background="#D9D9D9", font=("Roboto", 26))
-        lblFileCount.place(x=113, y=680)
-        lblDirCount.place(x=113, y=413)
-
-    def root_analysis(self):
-        """
-        Method - root_analysis
-        -----------------------
-        Purpose - This method is used to display the files and directories
-        located in the root directory of whatever file system has been chosen.
-        It uses pytsk3's Fs_Info.open method to open and explore the oroot directory.
-
-        This method also makes use of tkinters scrollable frames, this was used because
-        a root directory could have 100s of files and so labels would run out of screen
-        space.
-        """
-
-        self.ClearWindow()
-        rootScreen = self.__MainWindow
-        rootScreen.title(self.__title)
-        rootScreen.geometry(self.__screen_geometry)
-
-        rootScreen.attributes("-topmost", False)
-        rootScreen.resizable(False, False)
-        background = ttk.Label(rootScreen, text="")
-        background.place(x=0, y=0)
-
-        logo = PhotoImage(file=self.__FilesScreen, master=rootScreen)
-        background.config(image=logo)
-        background.img = logo
-        background.config(image=background.img)
-
-        btnHelp = ttk.Button(rootScreen, text=' Whats this? ', command=partial(self.display_msg, "rootScreen"))
-        btnHelp.place(x=1777, y=15)
-
-        lblChosenFS = ttk.Label(rootScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
-        lblChosenFS.place(x=102, y=210)
-
-        if len(self.file_list) > 0:
-            pass
-
-        else:
-            if self.IsE01 is False:
-                fs_info = pytsk3.FS_Info(self.diskimage, int(self.chosenOffset.get()))
+        qry_rows = """SELECT * FROM RootDirectory"""
+        cursor.execute(qry_rows)
+        results = cursor.fetchall()
+        row_count = []
+        for result in results:
+            if result[0] == self.chosenOffset.get():
+                row_count.append(result[0])
             else:
-                fs_info = pytsk3.FS_Info(self.img_info, int(self.chosenOffset.get()))
+                pass
 
-            root_dir = fs_info.open_dir(inode=fs_info.info.root_inum)
-            dir_count = 0
-            file_count = 0
-            file_in_dir = 0
-            for file in root_dir:
-                if file.info.meta != None:
-                    if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                        dir_count += 1
-                        file_in_dir += 1
-                        ascii_name = file.info.name.name.decode("ascii")
-                        self.dir_names.append(ascii_name)
-                    else:
-                        file_count += 1
-                        ascii_name = file.info.name.name.decode("ascii")
-                        self.file_list.append(ascii_name)
+        qry_FileName = f"""SELECT * From RootDirectory WHERE FileSys={self.chosenOffset.get()}"""
+        cursor.execute(qry_FileName)
+        result = cursor.fetchall()
 
-        xcord = 1324
-        ycord = 327
-        for dir in self.dir_names:
-            Label(rootScreen, text=dir, background="#D9D9D9", font=("Roboto", 16)).place(x=xcord, y=ycord)
-            ycord += 50
+        for r in result:
+            if r[2] == "Root":
+                if r[3] == "File":
+                    self.root_files.append(r[1])
+                elif r[3] == "Directory":
+                    self.root_directories.append(r[1])
 
         root = self.__MainWindow
-        frame = ScrollableFrame(700, 682, root)
+        frame = ScrollableFrame(700, 680, root)
         self.CurrentFrame = frame
         sCanvas = frame.getCanvas()
 
@@ -732,21 +671,32 @@ class ForensicGui():
 
         textFileName = colFile + 10
 
-        for file in self.file_list:
+        for file in self.root_files:
             sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
                                 text=file)
             rowPos = rowPos + lineHeight
 
         frame.refreshCanvas(sCanvas)
-        frame.place(x=378, y=300)
+        frame.place(x=341, y=292)
 
-        lblBack = ttk.Button(rootScreen, text=" Back ", command=self.MainScreen)
-        lblBack.place(x=396, y=11)
+        ycord = 292
+        for dir in self.root_directories:
+            Label(rootScreen, text=dir, background="#D9D9D9", font=("Roboto", 16)).place(x=1325, y=ycord)
+            ycord += 50
 
-        lblFileCount = ttk.Label(rootScreen, text=len(self.file_list), background="#D9D9D9", font=("Roboto", 26))
-        lblDirCount = ttk.Label(rootScreen, text=len(self.dir_names), background="#D9D9D9", font=("Roboto", 26))
+        btnHelp = ttk.Button(rootScreen, text=' Whats this? ', command=partial(self.display_msg, "rootScreen"))
+        btnHelp.place(x=1777, y=15)
+
+        lblChosenFS = ttk.Label(rootScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
+        lblChosenFS.place(x=102, y=210)
+
+        lblFileCount = ttk.Label(rootScreen, text=len(self.root_files), background="#D9D9D9", font=("Roboto", 26))
+        lblDirCount = ttk.Label(rootScreen, text=len(self.root_directories), background="#D9D9D9", font=("Roboto", 26))
         lblFileCount.place(x=113, y=680)
         lblDirCount.place(x=113, y=413)
+
+        btnBack = ttk.Button(rootScreen, text=' Back ', command=self.MainScreen)
+        btnBack.place(x=1777, y=55)
 
     def AllFileMeta(self):
         """
@@ -776,7 +726,7 @@ class ForensicGui():
 
         root = self.__MainWindow  # sets up TK instance to pass in
 
-        frame = ScrollableFrame(700, 1700, root)  # calling ScrollableFrame import and passing previous line in
+        frame = ScrollableFrame(850, 1850, root)  # calling ScrollableFrame import and passing previous line in
         self.CurrentFrame = frame  # Setting current frame
         sCanvas = frame.getCanvas()  # Calling a Frame method
 
@@ -785,20 +735,19 @@ class ForensicGui():
         colPos = 5
         lineHeight = 25
 
-        startRowPos = 35
-        headerRow = 70
-        endRowGrid = 670
         sCanvas.create_text(colPos, 5, fill="#D9D9D9", font=("Roboto", 18), justify=LEFT, width=682, anchor="nw",
                             text="File Metadata")  # This is what shows up at the very top, a header
         colFileName = colPos
-        colFileType = colPos + 280
-        colAccTime = colPos + 380
-        colCrtTime = colPos + 580
-        colModTime = colPos + 780
-        colMetaTime = colPos + 980
-        colOwnerGID = colPos + 1180
-        colSize = colPos + 1380
-        colDelStatus = colPos + 1580
+        colFileType = colPos + 300
+        colAccTime = colPos + 450
+        colCrtTime = colPos + 650
+        colModTime = colPos + 850
+        colMetaTime = colPos + 1050
+        colOwnerGID = colPos + 1250
+        colSize = colPos + 1350
+        colDelStatus = colPos + 1450
+        colParentDir = colPos + 1550
+        colMetaNum = colPos + 1750
 
         textFileName = colFileName + 10
         textFileType = colFileType + 10
@@ -809,10 +758,13 @@ class ForensicGui():
         textOwnerGID = colOwnerGID + 10
         textSize = colSize + 10
         textDelStatus = colDelStatus + 10
+        textParentDir = colParentDir + 10
+        textMetaNum = colMetaNum + 10
 
         # These are all for the subheadings
         sCanvas.create_text(textFileName, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Name")
         sCanvas.create_text(textFileType, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Type")
+        sCanvas.create_text(textMetaNum, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Record num")
         sCanvas.create_text(textAccTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Access time")
         sCanvas.create_text(textCrtTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Created time")
         sCanvas.create_text(textModTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Modified time")
@@ -821,50 +773,60 @@ class ForensicGui():
         sCanvas.create_text(textOwnerGID, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Owner group")
         sCanvas.create_text(textSize, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Size")
         sCanvas.create_text(textDelStatus, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Deleted?")
+        sCanvas.create_text(textParentDir, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Parent dir")
 
-        # Adding the data
-        if self.IsE01 is False:
-            partition = pytsk3.FS_Info(self.diskimage, int(self.chosenOffset.get()))
-        else:
-            partition = pytsk3.FS_Info(self.img_info, int(self.chosenOffset.get()))
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
 
-        for file in self.file_list:
-            file_obj = partition.open(file)
-            file_meta = file_obj.info.meta
-            file_name = file_obj.info.name
-            self.file_count = len(self.file_list)
+        qry_meta = """SELECT * FROM RootMeta"""
+        cursor.execute(qry_meta)
+        results = cursor.fetchall()
 
-            acc_time = datetime.utcfromtimestamp(file_meta.atime)
-            crt_time = datetime.utcfromtimestamp(file_meta.crtime)
-            meta_time = datetime.utcfromtimestamp(file_meta.ctime)
-            mod_time = datetime.utcfromtimestamp(file_meta.mtime)
+        for result in results:
+            if str(result[0]) == str(self.chosenOffset.get()):
+                if len(str(result[1])) > 51:
+                    name = str(result[1])
+                    name = name[0:51]
 
-            sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=file_name.name)
-            sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=file_name.type)
-            sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=acc_time)
-            sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=crt_time)
-            sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=mod_time)
-            sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=meta_time)
-            sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=file_meta.gid)
-            sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=file_meta.size)
+                    sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=name)
+                    sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                    sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                    sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                    sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                    sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                    sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                    sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                    sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                    sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[10])
+                    sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[11])
+                    rowPos = rowPos + lineHeight
 
-            if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
-                sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw", text="Deleted")
-            else:
-                sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw",
-                                    text="Not deleted")
-
-            rowPos = rowPos + lineHeight
+                else:
+                    sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[1])
+                    sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                    sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                    sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                    sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                    sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                    sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                    sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                    sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                    sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[10])
+                    sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[11])
+                    rowPos = rowPos + lineHeight
 
         lblBack = ttk.Button(AllFileScreen, text=" Back ", command=self.MainScreen)
         lblBack.place(x=22, y=205)
 
-        lblFileCount = ttk.Label(AllFileScreen, text=len(self.file_list), background="#D9D9D9", font=("Roboto", 16))
+        lblFileCount = ttk.Label(AllFileScreen, text=len(self.root_files), background="#D9D9D9",
+                                 font=("Roboto", 16))
         lblFileCount.place(x=72, y=115)
 
         # Refreshing and then placing it
         frame.refreshCanvas(sCanvas)
-        frame.place(x=150, y=250)
+        frame.place(x=10, y=203)
 
     def specific_file(self):
         """
@@ -946,7 +908,7 @@ class ForensicGui():
         It uses pytsk methods to retrieve all of the files and sub directories in the chosen
         directory.
         """
-        print("Here")
+
         self.ClearWindow()
         SpecDirScreen = self.__MainWindow
         SpecDirScreen.title(self.__title)
@@ -1064,7 +1026,6 @@ class ForensicGui():
                                 font=("Roboto", 26))
         lblFileCount.place(x=113, y=680)
         lblDirCount.place(x=113, y=413)
-
 
     def GetExifFile(self):
         """
@@ -1185,7 +1146,8 @@ class ForensicGui():
         btnDone = ttk.Button(FileCarveScreen, text=' Carve ', command=self.FileCarverComplete)
         btnDone.place(x=810, y=700)
 
-        btnHelp = ttk.Button(FileCarveScreen, text=' Whats this? ', command=partial(self.display_msg, "FileCarveScreen"))
+        btnHelp = ttk.Button(FileCarveScreen, text=' Whats this? ',
+                             command=partial(self.display_msg, "FileCarveScreen"))
         btnHelp.place(x=1777, y=15)
 
         btnBack = ttk.Button(FileCarveScreen, text=" Back ", command=self.MainScreen)
