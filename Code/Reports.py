@@ -32,7 +32,7 @@ class MakeReport():
             header = ["Name", "Type", "Metadata record", "Created", "Accessed", "Modified", "Metadata change",
                       "Group ID", "size", "status"]
             newline = ""
-            info = [name, type, record_num, crtime, acc_time, modtime, metatime, size, status]
+            info = [name, type, record_num, crtime, acc_time, modtime, metatime, gid, size, status]
             linewriter.writerow(header)
             linewriter.writerow(info)
             linewriter.writerow(newline)

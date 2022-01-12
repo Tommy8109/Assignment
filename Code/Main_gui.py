@@ -1,22 +1,19 @@
 """All of the imports necessary for the programs functionality"""
 import sqlite3
 import time
-import pytsk3
-from datetime import datetime
-from Exif_reader import ExifTags
-from SigAnalyse import Analyse
-from Hash_verify import HashVerify
 import os
 from tkinter import *
 from tkinter import ttk
 from tkinter.ttk import *
 from tkinter import messagebox
+import tkinter.filedialog as filedialog
 from scrollableFrame import ScrollableFrame
 import re
-from E01_Handler import E01Handler
 from pytskHandler import PytskInfo
 from functools import partial
-from Extensions import GetExt
+from FileCarver import FileCarving
+import exifread
+import math
 
 
 class ForensicGui():
@@ -54,6 +51,7 @@ class ForensicGui():
         self.__FilesScreen = "FilesScreen.png"
         self.__FileMetaScreen = "AllFileMetaScreen.png"
         self.__SpecFile = "SpecFile.png"
+        self.__ChooseFileScreen = "SpecificFile.png"
         self.__EXIFscreen = "EXIFscreen.png"
         self.__FileCarveScreen = "FileCarve.png"
         self.__FileCarveDoneScreen = "FileCarveComplete.png"
@@ -62,6 +60,13 @@ class ForensicGui():
         self.__PhotoScreenSecond = "PhotoViewerSecond.png"
         self.__FilesScreenType = "FileCarveType.png"
         self.__LoadScreenFile = "LoadScreen.png"
+        self.__MD5HashScreen = "MD5Screen.png"
+        self.__SHAHashScreen = "SHAScreen.png"
+        self.__FileHashScreen = "HashByFileScreen.png"
+        self.__SpecificDirScreen = "SpecificDir.png"
+        self.__SignatureScreen = "FileSigScreen.png"
+        self.__HexScreen = "HexScreen.png"
+        self.__RegScreen = "RegistryScreen.png"
 
         self.__MainWindow = Tk()
         self.__title = "APDF FORENSIC TOOL"
@@ -74,6 +79,15 @@ class ForensicGui():
         self.img_info = object
         self.tsk_handle = object
         self.file_count = int
+        self.md5_check = int
+        self.sha_check = int
+        self.filesize = StringVar()
+        self.currentSector = StringVar()
+        self.numberOfSectors = 0
+        self.currentSelectedSector = 0
+        self.BottomFrame = None
+        self.part_scheme = ""
+        self.OS_name = ""
 
         self.root_files = []
         self.root_directories = []
@@ -105,16 +119,11 @@ class ForensicGui():
         self.HashFile = StringVar()
         self.PhotoToView = StringVar()
         self.file_type = StringVar()
+        self.dir_to_analyse = StringVar()
+        self.file_to_analyse = StringVar()
+        self.file_filter = StringVar()
 
     def ClearWindow(self):
-        """
-        Method - ClearWindow
-        ---------------------
-        Purpose - The purpose of this method is to remove all things from the
-        screen its called on. Its used when moving between screens so that the
-        new one can be loaded.
-        """
-
         window = self.__MainWindow
         _list = window.winfo_children()
 
@@ -131,7 +140,6 @@ class ForensicGui():
         :param ImageFileName: The image to use as a background
         :return: Returns a frame objects
         """
-
         menuScreen = self.__MainWindow
 
         frame = Frame(menuScreen, width=682, height=453, bg='#001636', )
@@ -179,7 +187,6 @@ class ForensicGui():
         the OS import and lists them on the screen. The file chosen
         from that list is stored as a StringVar().
         """
-
         self.ClearWindow()
         firstScreen = self.__MainWindow
         firstScreen.title(self.__title)
@@ -214,8 +221,22 @@ class ForensicGui():
         btnContinue = ttk.Button(firstScreen, text=" Analyse ", command=self.LoadingScreen)
         btnContinue.place(x=755, y=510)
 
+        btnDialog = ttk.Button(firstScreen, command=self.FileBrowse, text="Or browse files")
+        btnDialog.place(x=755, y=560)
+
         firstScreen.option_add('*tearOff', False)
         firstScreen.mainloop()
+
+    def FileBrowse(self):
+        filetypes = (
+            ('001 Files', '*.001'),
+            ('E01 Files', '*.E01'),
+            ('Raw Files', '*.raw'),
+            ('DD files', '*.dd')
+        )
+        cwd = os.getcwd()
+        filename = filedialog.askopenfilename(title="Choose a file", initialdir=cwd, filetypes=filetypes)
+        self.ChosenFile.set(filename)
 
     def LoadingScreen(self):
         self.ClearWindow()
@@ -271,6 +292,9 @@ class ForensicGui():
         222-259.
         """
 
+        # self.connection = sqlite3.connect("APDF Log\\APDF report.db")
+        # self.cursor = self.connection.cursor()
+
         if self.db_exists is False:
             pattern = r"(?P<name>.+)\.(.{2})"
             regex = re.compile(pattern)
@@ -281,6 +305,7 @@ class ForensicGui():
                     self.IsE01 = True
                     self.tsk_handle = PytskInfo(self.ChosenFile.get(), "E01")
                     self.tsk_handle.main()
+                    self.OS_name = self.tsk_handle.product_name
                     self.file_list = self.tsk_handle.files
                     self.dir_names = self.tsk_handle.directories
                     self.RootFiles = self.tsk_handle.root_files
@@ -299,17 +324,7 @@ class ForensicGui():
                 self.IsE01 = False
 
         else:
-            pattern = r"(?P<name>.+)\.(.{2})"
-            regex = re.compile(pattern)
-            m = regex.search(self.ChosenFile.get())
-            if m is not None:
-                extension = m.group(2)
-                if extension == "E0":
-                    self.IsE01 = True
-                else:
-                    self.IsE01 = False
-            else:
-                self.IsE01 = False
+            pass
 
         self.ClearWindow()
         MainScreen = self.__MainWindow
@@ -333,46 +348,65 @@ class ForensicGui():
         menubar = Menu(MainScreen)
         MainScreen.config(menu=menubar)
 
-        PartitionMenu = Menu(menubar)
-        FSMenu = Menu(menubar)
-        FileMenu = Menu(menubar)
-        CarveMenu = Menu(menubar)
-        HashMenu = Menu(menubar)
-        newfileMenu = Menu(menubar)
-        QuitMenu = Menu(menubar)
+        if self.chosenOffset.get() == "":
+            PartitionMenu = Menu(menubar)
+            FSMenu = Menu(menubar)
+            HexMenu = Menu(menubar)
+            QuitMenu = Menu(menubar)
 
-        menubar.add_cascade(menu=PartitionMenu, label='Partitions ')
-        menubar.add_cascade(menu=FSMenu, label='File systems')
-        menubar.add_cascade(menu=FileMenu, label='In depth')
-        menubar.add_cascade(menu=CarveMenu, label='File carving')
-        menubar.add_cascade(menu=HashMenu, label='Hashing')
-        menubar.add_cascade(menu=newfileMenu, label='New file')
-        menubar.add_cascade(menu=QuitMenu, label='Quit')
+            menubar.add_cascade(menu=PartitionMenu, label='Partitions ')
+            menubar.add_cascade(menu=FSMenu, label='File systems')
+            menubar.add_cascade(menu=HexMenu, label='Hex viewer')
 
-        PartitionMenu.add_command(label='Decode', command=self.partitions)
-        PartitionMenu.add_command(label='Boot view')
+            PartitionMenu.add_command(label='Decode', command=self.partitions)
+            FSMenu.add_command(label='Decode', command=self.file_sys_decode)
+            QuitMenu.add_command(label='Quit', command=quit)
 
-        FSMenu.add_command(label='Decode', command=self.file_sys_decode)
-        FSMenu.add_command(label='Boot view')
 
-        FileMenu.add_command(label='Analyse root', command=self.root_analyse)
-        FileMenu.add_command(label='All file metadata', command=self.AllFileMeta)
-        FileMenu.add_command(label='Specific file', command=self.specific_file)
-        FileMenu.add_command(label='Specific directory', command=self.Get_Specific_dir)
-        FileMenu.add_command(label='EXIF data', command=self.GetExifFile)
-        FileMenu.add_command(label='File Hex')
-        FileMenu.add_command(label='File signature')
-        FileMenu.add_command(label='Photo viewer', command=self.photo_viewer_first)
+        else:
+            PartitionMenu = Menu(menubar)
+            FSMenu = Menu(menubar)
+            HexMenu = Menu(menubar)
+            QuitMenu = Menu(menubar)
+            FileMenu = Menu(menubar)
+            CarveMenu = Menu(menubar)
+            HashMenu = Menu(menubar)
+            RegMenu = Menu(menubar)
 
-        CarveMenu.add_command(label='Carve specific', command=self.FileCarver)
-        CarveMenu.add_command(label='Carve by type', command=self.CarveByTypeGet)
-        CarveMenu.add_command(label='Carve All', command=self.CarveAll)
 
-        HashMenu.add_command(label='Hash compare', command=self.get_hashes)
+            menubar.add_cascade(menu=PartitionMenu, label='Partitions ')
+            menubar.add_cascade(menu=FSMenu, label='File systems')
+            menubar.add_cascade(menu=FileMenu, label='In depth')
+            menubar.add_cascade(menu=CarveMenu, label='File carving')
+            menubar.add_cascade(menu=HashMenu, label='Hashing')
+            menubar.add_cascade(menu=HexMenu, label='Hex viewer')
+            menubar.add_cascade(menu=RegMenu, label='Registry')
 
-        newfileMenu.add_command(label='Analyse different file', command=self.first_screen)
+            PartitionMenu.add_command(label='Decode', command=self.partitions)
 
-        QuitMenu.add_command(label='Quit', command=quit)
+            FSMenu.add_command(label='Decode', command=self.file_sys_decode)
+
+            FileMenu.add_command(label='Analyse root', command=self.root_analyse)
+            FileMenu.add_command(label='All file metadata', command=self.AllFileMeta)
+            FileMenu.add_command(label='Specific file', command=self.specific_file)
+            FileMenu.add_command(label='Specific directory', command=self.get_specific_dir)
+            FileMenu.add_command(label='EXIF data', command=self.GetExifFile)
+            FileMenu.add_command(label='File Hex')
+            FileMenu.add_command(label='File signature', command=self.file_signatures)
+            FileMenu.add_command(label='Photo viewer', command=self.photo_viewer_first)
+
+            CarveMenu.add_command(label='Carve specific', command=self.FileCarver)
+            CarveMenu.add_command(label='Carve System', command=self.CarveSys)
+            CarveMenu.add_command(label='Carve by type', command=self.CarveByTypeGet)
+            CarveMenu.add_command(label='Carve All', command=self.CarveAll)
+
+            HashMenu.add_command(label='Hash compare', command=self.get_hashes)
+
+            HexMenu.add_command(label='Hex view', command=self.boot_view_screen)
+
+            RegMenu.add_command(label='Registry info', command=self.registry_info)
+
+            QuitMenu.add_command(label='Quit', command=quit)
 
         connection = sqlite3.connect("APDF Log\\APDF report.db")
         cursor = connection.cursor()
@@ -398,12 +432,12 @@ class ForensicGui():
             lblName.place(x=60, y=91)
             lblBytes = ttk.Label(MainScreen, text=size, background="#D9D9D9", font=("Roboto", 20))
             lblBytes.place(x=124, y=352)
-            lblMb = ttk.Label(MainScreen, text=sectors, background="#D9D9D9", font=("Roboto", 20))
-            lblMb.place(x=124, y=480)
-            lblSec = ttk.Label(MainScreen, text=alloc, background="#D9D9D9", font=("Roboto", 20))
-            lblSec.place(x=124, y=595)
-            lblAll = ttk.Label(MainScreen, text=unall, background="#D9D9D9", font=("Roboto", 20))
-            lblAll.place(x=124, y=735)
+            lblsectors = ttk.Label(MainScreen, text=sectors, background="#D9D9D9", font=("Roboto", 20))
+            lblsectors.place(x=124, y=480)
+            lblAll = ttk.Label(MainScreen, text=alloc, background="#D9D9D9", font=("Roboto", 20))
+            lblAll.place(x=124, y=658)
+            lblUnAll = ttk.Label(MainScreen, text=unall, background="#D9D9D9", font=("Roboto", 20))
+            lblUnAll.place(x=124, y=841)
 
         else:
             qry_size = """SELECT ByteSize FROM BasicInfo"""
@@ -433,21 +467,24 @@ class ForensicGui():
             qry_name = """SELECT ExaminerName FROM BasicInfo"""
             cursor.execute(qry_name)
             case_name = cursor.fetchall()
+            case_name = self.format_result(case_name)
 
             qry_hash = """SELECT Hash FROM BasicInfo"""
             cursor.execute(qry_hash)
             case_hash = self.format_result(cursor.fetchall())
+            case_hash = str(case_hash).replace("\"", "")
+            case_hash = str(case_hash).replace("MD5: ", "")
 
             lblName = ttk.Label(MainScreen, text=self.ChosenFile.get(), background="#D9D9D9", font=("Roboto", 20))
             lblName.place(x=60, y=91)
             lblBytes = ttk.Label(MainScreen, text=size, background="#D9D9D9", font=("Roboto", 20))
             lblBytes.place(x=124, y=352)
-            lblMb = ttk.Label(MainScreen, text=sectors, background="#D9D9D9", font=("Roboto", 20))
-            lblMb.place(x=124, y=480)
-            lblSec = ttk.Label(MainScreen, text=alloc, background="#D9D9D9", font=("Roboto", 20))
-            lblSec.place(x=124, y=595)
-            lblAll = ttk.Label(MainScreen, text=unall, background="#D9D9D9", font=("Roboto", 20))
-            lblAll.place(x=124, y=735)
+            lblsectors = ttk.Label(MainScreen, text=sectors, background="#D9D9D9", font=("Roboto", 20))
+            lblsectors.place(x=124, y=480)
+            lblAll = ttk.Label(MainScreen, text=alloc, background="#D9D9D9", font=("Roboto", 20))
+            lblAll.place(x=124, y=658)
+            lblUnAll = ttk.Label(MainScreen, text=unall, background="#D9D9D9", font=("Roboto", 20))
+            lblUnAll.place(x=124, y=841)
 
             lblCaseNum = ttk.Label(MainScreen, text=case_num, background="#D9D9D9", font=("Roboto", 20))
             lblCaseNum.place(x=550, y=424)
@@ -500,6 +537,8 @@ class ForensicGui():
 
         lblScheme = ttk.Label(PartScreen, text=scheme, background="#D9D9D9", font=("Roboto", 24))
         lblScheme.place(x=134, y=432)
+
+        self.part_scheme = scheme
 
         xcord1 = 419
         xcord2 = 1230
@@ -617,6 +656,13 @@ class ForensicGui():
         btnSet.place(x=20, y=930)
 
     def root_analyse(self):
+        """
+        Method - root_analyse
+        ---------------------
+        Purpose - This method is used to display the directories and files
+        found in the root directory of the chosen file system.
+        """
+
         self.ClearWindow()
         rootScreen = self.__MainWindow
         rootScreen.title(self.__title)
@@ -653,11 +699,11 @@ class ForensicGui():
         result = cursor.fetchall()
 
         for r in result:
-            if r[2] == "Root":
-                if r[3] == "File":
-                    self.root_files.append(r[1])
-                elif r[3] == "Directory":
-                    self.root_directories.append(r[1])
+            #if r[2] == "Root":
+            if r[3] == "File":
+                self.root_files.append(r[1])
+            elif r[3] == "Directory":
+                self.root_directories.append(r[1])
 
         root = self.__MainWindow
         frame = ScrollableFrame(700, 680, root)
@@ -679,21 +725,39 @@ class ForensicGui():
         frame.refreshCanvas(sCanvas)
         frame.place(x=341, y=292)
 
-        ycord = 292
-        for dir in self.root_directories:
-            Label(rootScreen, text=dir, background="#D9D9D9", font=("Roboto", 16)).place(x=1325, y=ycord)
-            ycord += 50
+        root = self.__MainWindow
+        frame = ScrollableFrame(700, 680, root)
+        self.CurrentFrame = frame
+        sCanvas = frame.getCanvas()
+
+        rowPos = 90
+        colPos = 5
+        lineHeight = 25
+        colDir = colPos
+
+        textDirName = colDir + 10
+
+        for directory in self.root_directories:
+            sCanvas.create_text(textDirName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=directory)
+            rowPos = rowPos + lineHeight
+
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=1100, y=292)
 
         btnHelp = ttk.Button(rootScreen, text=' Whats this? ', command=partial(self.display_msg, "rootScreen"))
         btnHelp.place(x=1777, y=15)
 
+        lblChosenText = ttk.Label(rootScreen, text=f"Viewing file system:{self.chosenOffset.get()}",
+                                  background="#D9D9D9",font=("Roboto", 20))
+        lblChosenText.place(x=6, y=358)
         lblChosenFS = ttk.Label(rootScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
-        lblChosenFS.place(x=102, y=210)
+        lblChosenFS.place(x=125, y=558)
 
         lblFileCount = ttk.Label(rootScreen, text=len(self.root_files), background="#D9D9D9", font=("Roboto", 26))
         lblDirCount = ttk.Label(rootScreen, text=len(self.root_directories), background="#D9D9D9", font=("Roboto", 26))
-        lblFileCount.place(x=113, y=680)
-        lblDirCount.place(x=113, y=413)
+        lblFileCount.place(x=504, y=160)
+        lblDirCount.place(x=1337, y=160)
 
         btnBack = ttk.Button(rootScreen, text=' Back ', command=self.MainScreen)
         btnBack.place(x=1777, y=55)
@@ -723,6 +787,12 @@ class ForensicGui():
 
         btnHelp = ttk.Button(AllFileScreen, text=' Whats this? ', command=partial(self.display_msg, "AllFileScreen"))
         btnHelp.place(x=1777, y=15)
+
+        entryFilter = ttk.Entry(AllFileScreen, textvariable=self.file_filter)
+        entryFilter.place(x=1646, y=146)
+
+        btnFilter = ttk.Button(AllFileScreen, text=' Filter ', command=self.filtered_meta)
+        btnFilter.place(x=1776, y=146)
 
         root = self.__MainWindow  # sets up TK instance to pass in
 
@@ -828,87 +898,279 @@ class ForensicGui():
         frame.refreshCanvas(sCanvas)
         frame.place(x=10, y=203)
 
+    def filtered_meta(self):
+        self.ClearWindow()
+        AllFileScreen = self.__MainWindow
+        AllFileScreen.title(self.__title)
+        AllFileScreen.geometry(self.__screen_geometry)
+
+        AllFileScreen.attributes("-topmost", False)
+        AllFileScreen.resizable(False, False)
+        background = ttk.Label(AllFileScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__FileMetaScreen, master=AllFileScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        btnHelp = ttk.Button(AllFileScreen, text=' Whats this? ', command=partial(self.display_msg, "AllFileScreen"))
+        btnHelp.place(x=1777, y=15)
+
+        root = self.__MainWindow  # sets up TK instance to pass in
+
+        frame = ScrollableFrame(850, 1850, root)  # calling ScrollableFrame import and passing previous line in
+        self.CurrentFrame = frame  # Setting current frame
+        sCanvas = frame.getCanvas()  # Calling a Frame method
+
+        rowPos = 90  # setting position variables
+        textRowPos = 40
+        colPos = 5
+        lineHeight = 25
+
+        sCanvas.create_text(colPos, 5, fill="#D9D9D9", font=("Roboto", 18), justify=LEFT, width=682, anchor="nw",
+                            text="File Metadata")  # This is what shows up at the very top, a header
+        colFileName = colPos
+        colFileType = colPos + 300
+        colAccTime = colPos + 450
+        colCrtTime = colPos + 650
+        colModTime = colPos + 850
+        colMetaTime = colPos + 1050
+        colOwnerGID = colPos + 1250
+        colSize = colPos + 1350
+        colDelStatus = colPos + 1450
+        colParentDir = colPos + 1550
+        colMetaNum = colPos + 1750
+
+        textFileName = colFileName + 10
+        textFileType = colFileType + 10
+        textAccTime = colAccTime + 10
+        textCrtTime = colCrtTime + 10
+        textModTime = colModTime + 10
+        textMetaTime = colMetaTime + 10
+        textOwnerGID = colOwnerGID + 10
+        textSize = colSize + 10
+        textDelStatus = colDelStatus + 10
+        textParentDir = colParentDir + 10
+        textMetaNum = colMetaNum + 10
+
+        # These are all for the subheadings
+        sCanvas.create_text(textFileName, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Name")
+        sCanvas.create_text(textFileType, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Type")
+        sCanvas.create_text(textMetaNum, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Record num")
+        sCanvas.create_text(textAccTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Access time")
+        sCanvas.create_text(textCrtTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Created time")
+        sCanvas.create_text(textModTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Modified time")
+        sCanvas.create_text(textMetaTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw",
+                            text="Metadata changed")
+        sCanvas.create_text(textOwnerGID, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Owner group")
+        sCanvas.create_text(textSize, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Size")
+        sCanvas.create_text(textDelStatus, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Deleted?")
+        sCanvas.create_text(textParentDir, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Parent dir")
+
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
+
+        qry_meta = f"""SELECT * FROM RootMeta WHERE FileType='{self.file_filter.get()}'"""
+        cursor.execute(qry_meta)
+        results = cursor.fetchall()
+
+        for result in results:
+            if str(result[0]) == str(self.chosenOffset.get()):
+                if len(str(result[1])) > 51:
+                    name = str(result[1])
+                    name = name[0:51]
+
+                    sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=name)
+                    sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                    sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                    sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                    sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                    sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                    sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                    sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                    sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                    sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[10])
+                    sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[11])
+                    rowPos = rowPos + lineHeight
+
+                else:
+                    sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[1])
+                    sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                    sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                    sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                    sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                    sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                    sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                    sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                    sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                    sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[10])
+                    sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                        text=result[11])
+                    rowPos = rowPos + lineHeight
+
+        lblBack = ttk.Button(AllFileScreen, text=" Back ", command=self.AllFileMeta)
+        lblBack.place(x=22, y=205)
+
+        lblFileCount = ttk.Label(AllFileScreen, text=len(self.root_files), background="#D9D9D9",
+                                 font=("Roboto", 16))
+        lblFileCount.place(x=72, y=115)
+
+        # Refreshing and then placing it
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=10, y=203)
+
     def specific_file(self):
         """
         Method - specific_file
         -------------------------
-        Purpose - This method does the same as AllFileMeta, but for one,
+        Purpose - This method does the same as specific_file, but for one,
         user chosen, file. It retrieves the same information and displays
         it in the same way.
         """
 
         self.ClearWindow()
-        SpecFileScreen = self.__MainWindow
-        SpecFileScreen.title(self.__title)
-        SpecFileScreen.geometry(self.__screen_geometry)
+        GetFileScreen = self.__MainWindow
+        GetFileScreen.title(self.__title)
+        GetFileScreen.geometry(self.__screen_geometry)
 
-        SpecFileScreen.attributes("-topmost", False)
-        SpecFileScreen.resizable(False, False)
-        background = ttk.Label(SpecFileScreen, text="")
+        GetFileScreen.attributes("-topmost", False)
+        GetFileScreen.resizable(False, False)
+        background = ttk.Label(GetFileScreen, text="")
         background.place(x=0, y=0)
 
-        logo = PhotoImage(file=self.__SpecFile, master=SpecFileScreen)
+        logo = PhotoImage(file=self.__ChooseFileScreen, master=GetFileScreen)
         background.config(image=logo)
         background.img = logo
         background.config(image=background.img)
 
-        entryFileName = ttk.Entry(SpecFileScreen, textvariable=self.FileToDecode, background="#D9D9D9")
-        entryFileName.place(x=46, y=293)
+        entry_filename = ttk.Entry(GetFileScreen, textvariable=self.file_to_analyse)
+        entry_filename.place(x=825, y=305)
 
-        btnMetadata = ttk.Button(SpecFileScreen, text=' Analyse ', command=self.specific_file)
-        btnMetadata.place(x=46, y=393)
+        btnAnalyse = ttk.Button(GetFileScreen, text='Analyse', command=self.show_specific_file)
+        btnAnalyse.place(x=825, y=375)
 
-        lblBack = ttk.Button(SpecFileScreen, text=" Back ", command=self.MainScreen)
-        lblBack.place(x=46, y=493)
+        btnBack = ttk.Button(GetFileScreen, text=' back ', command=self.MainScreen)
+        btnBack.place(x=88, y=935)
 
-        if self.FileToDecode.get() is not None:
-            if self.IsE01 is False:
-                partition = pytsk3.FS_Info(self.diskimage, int(self.chosenOffset.get()))
+    def show_specific_file(self):
+        self.ClearWindow()
+        SpecFileMeta = self.__MainWindow
+        SpecFileMeta.title(self.__title)
+        SpecFileMeta.geometry(self.__screen_geometry)
+
+        SpecFileMeta.attributes("-topmost", False)
+        SpecFileMeta.resizable(False, False)
+        background = ttk.Label(SpecFileMeta, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__FileMetaScreen, master=SpecFileMeta)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
+
+        qry_meta = f"""SELECT * FROM RootMeta WHERE Name='{self.file_to_analyse.get()}'"""
+        cursor.execute(qry_meta)
+        results = cursor.fetchall()
+
+        root = self.__MainWindow
+
+        frame = ScrollableFrame(850, 1850, root)
+        self.CurrentFrame = frame
+        sCanvas = frame.getCanvas()
+
+        rowPos = 90
+        textRowPos = 40
+        colPos = 5
+        lineHeight = 25
+
+        sCanvas.create_text(colPos, 5, fill="#D9D9D9", font=("Roboto", 18), justify=LEFT, width=682, anchor="nw",
+                            text="File Metadata")
+        colFileName = colPos
+        colFileType = colPos + 300
+        colAccTime = colPos + 450
+        colCrtTime = colPos + 650
+        colModTime = colPos + 850
+        colMetaTime = colPos + 1050
+        colOwnerGID = colPos + 1250
+        colSize = colPos + 1350
+        colDelStatus = colPos + 1450
+        colParentDir = colPos + 1550
+        colMetaNum = colPos + 1750
+
+        textFileName = colFileName + 10
+        textFileType = colFileType + 10
+        textAccTime = colAccTime + 10
+        textCrtTime = colCrtTime + 10
+        textModTime = colModTime + 10
+        textMetaTime = colMetaTime + 10
+        textOwnerGID = colOwnerGID + 10
+        textSize = colSize + 10
+        textDelStatus = colDelStatus + 10
+        textParentDir = colParentDir + 10
+        textMetaNum = colMetaNum + 10
+
+        # These are all for the subheadings
+        sCanvas.create_text(textFileName, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Name")
+        sCanvas.create_text(textFileType, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Type")
+        sCanvas.create_text(textMetaNum, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Record num")
+        sCanvas.create_text(textAccTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Access time")
+        sCanvas.create_text(textCrtTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Created time")
+        sCanvas.create_text(textModTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Modified time")
+        sCanvas.create_text(textMetaTime, textRowPos, fill="#000000", justify=LEFT, anchor="nw",
+                            text="Metadata changed")
+        sCanvas.create_text(textOwnerGID, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Owner group")
+        sCanvas.create_text(textSize, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Size")
+        sCanvas.create_text(textDelStatus, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Deleted?")
+        sCanvas.create_text(textParentDir, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Parent dir")
+
+        for result in results:
+            if len(str(result[1])) > 51:
+                name = str(result[1])
+                name = name[0:51]
+
+                sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=name)
+                sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[10])
+                sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[11])
+                rowPos = rowPos + lineHeight
+
             else:
-                partition = pytsk3.FS_Info(self.img_info, int(self.chosenOffset.get()))
+                sCanvas.create_text(textFileName, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[1])
+                sCanvas.create_text(textFileType, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[2])
+                sCanvas.create_text(textMetaNum, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[3])
+                sCanvas.create_text(textAccTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[4])
+                sCanvas.create_text(textCrtTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[5])
+                sCanvas.create_text(textModTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[6])
+                sCanvas.create_text(textMetaTime, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[7])
+                sCanvas.create_text(textOwnerGID, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[8])
+                sCanvas.create_text(textSize, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=result[9])
+                sCanvas.create_text(textDelStatus, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                    text=result[10])
+                sCanvas.create_text(textParentDir, rowPos, fill="#000000", justify=LEFT, anchor="nw",
+                                    text=result[11])
+                rowPos = rowPos + lineHeight
 
-            file_obj = partition.open(self.FileToDecode.get())
-            file_meta = file_obj.info.meta
-            file_name = file_obj.info.name
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=10, y=203)
 
-            acc_time = datetime.utcfromtimestamp(file_meta.atime)
-            crt_time = datetime.utcfromtimestamp(file_meta.crtime)
-            meta_time = datetime.utcfromtimestamp(file_meta.ctime)
-            mod_time = datetime.utcfromtimestamp(file_meta.mtime)
+        btnBack = ttk.Button(SpecFileMeta, text=' Back ', command=self.specific_file)
+        btnBack.place(x=25, y=25)
 
-            lblType = ttk.Label(SpecFileScreen, text=file_name.type, background="#D9D9D9", font=("Roboto", 16))
-            lblType.place(x=681, y=227)
-            lblAddr = ttk.Label(SpecFileScreen, text=file_meta.addr, background="#D9D9D9", font=("Roboto", 16))
-            lblAddr.place(x=971, y=227)
-            lblAcc = ttk.Label(SpecFileScreen, text=acc_time, background="#D9D9D9", font=("Roboto", 16))
-            lblAcc.place(x=341, y=511)
-            lblCrt = ttk.Label(SpecFileScreen, text=crt_time, background="#D9D9D9", font=("Roboto", 16))
-            lblCrt.place(x=753, y=511)
-            lblMod = ttk.Label(SpecFileScreen, text=mod_time, background="#D9D9D9", font=("Roboto", 16))
-            lblMod.place(x=1156, y=511)
-            lblMeta = ttk.Label(SpecFileScreen, text=meta_time, background="#D9D9D9", font=("Roboto", 16))
-            lblMeta.place(x=341, y=784)
-            lblGID = ttk.Label(SpecFileScreen, text=file_meta.gid, background="#D9D9D9", font=("Roboto", 16))
-            lblGID.place(x=816, y=784)
-            lblSize = ttk.Label(SpecFileScreen, text=file_meta.size, background="#D9D9D9", font=("Roboto", 16))
-            lblSize.place(x=1254, y=784)
-
-            if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
-                lblDel = ttk.Label(SpecFileScreen, text="Deleted", background="#D9D9D9", font=("Roboto", 16))
-                lblDel.place(x=341, y=262)
-            else:
-                lblDel = ttk.Label(SpecFileScreen, text="Not Deleted", background="#D9D9D9", font=("Roboto", 16))
-                lblDel.place(x=341, y=262)
-
-    def Get_Specific_dir(self):
-        """
-        Method - Specific_dir
-        ---------------------
-        Purpose - This method does the same as root_analysis, but for a user chosen directory.
-        It uses pytsk methods to retrieve all of the files and sub directories in the chosen
-        directory.
-        """
-
+    def get_specific_dir(self):
         self.ClearWindow()
         SpecDirScreen = self.__MainWindow
         SpecDirScreen.title(self.__title)
@@ -919,19 +1181,19 @@ class ForensicGui():
         background = ttk.Label(SpecDirScreen, text="")
         background.place(x=0, y=0)
 
-        logo = PhotoImage(file=self.__FilesScreen, master=SpecDirScreen)
+        logo = PhotoImage(file=self.__SpecificDirScreen, master=SpecDirScreen)
         background.config(image=logo)
         background.img = logo
         background.config(image=background.img)
 
-        lblChosenFS = ttk.Label(SpecDirScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
-        lblChosenFS.place(x=102, y=210)
+        entryDirName = ttk.Entry(SpecDirScreen, textvariable=self.dir_to_analyse)
+        entryDirName.place(x=604, y=182)
 
-        entryDir = ttk.Entry(SpecDirScreen, textvariable=self.DirToDecode)
-        entryDir.place(x=88, y=835)
+        btnAnalyse = ttk.Button(SpecDirScreen, text='Analyse', command=self.Specific_dir)
+        btnAnalyse.place(x=604, y=282)
 
-        btnDecode = ttk.Button(SpecDirScreen, text=' Decode ', command=self.Specific_dir)
-        btnDecode.place(x=88, y=935)
+        btnBack = ttk.Button(SpecDirScreen, text=' Back ', command=self.MainScreen)
+        btnBack.place(x=1777, y=55)
 
     def Specific_dir(self):
         """
@@ -957,49 +1219,17 @@ class ForensicGui():
         background.img = logo
         background.config(image=background.img)
 
-        lblChosenFS = ttk.Label(SpecDirScreen, text=self.chosenOffset.get(), background="#D9D9D9", font=("Roboto", 24))
-        lblChosenFS.place(x=102, y=210)
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
 
-        btnBack = ttk.Button(SpecDirScreen, text=' back ', command=self.Get_Specific_dir)
-        btnBack.place(x=88, y=935)
-
-        if self.IsE01 is False:
-            fs_info = pytsk3.FS_Info(self.diskimage, int(self.chosenOffset.get()))
-        else:
-            fs_info = pytsk3.FS_Info(self.img_info, int(self.chosenOffset.get()))
-
-        directory = "/" + self.DirToDecode.get()
-        print(directory)
-
-        root_dir = fs_info.open_dir(directory)
-        dir_count = 0
-        file_count = 0
-        file_in_dir = 0
-        for file in root_dir:
-            if file.info.meta != None:
-                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                    dir_count += 1
-                    file_in_dir += 1
-                    ascii_name = file.info.name.name.decode("ascii")
-                    self.Specific_dir_subdir.append(ascii_name)
-                else:
-                    file_count += 1
-                    ascii_name = file.info.name.name.decode("ascii")
-                    self.Specific_dir_files.append(ascii_name)
-
-        xcord = 1324
-        ycord = 327
-        for dir in self.Specific_dir_subdir:
-            Label(SpecDirScreen, text=dir, background="#D9D9D9", font=("Roboto", 16)).place(x=xcord, y=ycord)
-            ycord += 50
+        qry_rows = f"""SELECT * FROM RootMeta WHERE ParentDirectory='/{self.dir_to_analyse.get()}' AND Offset='{self.chosenOffset.get()}'"""
+        cursor.execute(qry_rows)
+        results = cursor.fetchall()
 
         root = self.__MainWindow
-        frame = ScrollableFrame(700, 682, root)
+        frame = ScrollableFrame(700, 680, root)
         self.CurrentFrame = frame
         sCanvas = frame.getCanvas()
-
-        frame.refreshCanvas(sCanvas)
-        frame.place(x=378, y=300)
 
         rowPos = 90
         colPos = 5
@@ -1008,24 +1238,15 @@ class ForensicGui():
 
         textFileName = colFile + 10
 
-        for file in self.Specific_dir_files:
-            sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT,
-                                anchor="nw",
-                                text=file)
+        for r in results:
+            sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",text=r[1])
             rowPos = rowPos + lineHeight
 
         frame.refreshCanvas(sCanvas)
-        frame.place(x=378, y=300)
+        frame.place(x=341, y=292)
 
-        lblBack = ttk.Button(SpecDirScreen, text=" Back ", command=self.MainScreen)
-        lblBack.place(x=396, y=11)
-
-        lblFileCount = ttk.Label(SpecDirScreen, text=len(self.Specific_dir_files), background="#D9D9D9",
-                                 font=("Roboto", 26))
-        lblDirCount = ttk.Label(SpecDirScreen, text=len(self.Specific_dir_subdir), background="#D9D9D9",
-                                font=("Roboto", 26))
-        lblFileCount.place(x=113, y=680)
-        lblDirCount.place(x=113, y=413)
+        btnBack = ttk.Button(SpecDirScreen, text=' Back ', command=self.MainScreen)
+        btnBack.place(x=1777, y=55)
 
     def GetExifFile(self):
         """
@@ -1063,6 +1284,70 @@ class ForensicGui():
         btnHelp = ttk.Button(exifScreen, text=' Whats this? ', command=partial(self.display_msg, "exifScreen"))
         btnHelp.place(x=26, y=500)
 
+    def file_signatures(self):
+        self.ClearWindow()
+        SignatureScreen = self.__MainWindow
+        SignatureScreen.title(self.__title)
+        SignatureScreen.geometry(self.__screen_geometry)
+
+        SignatureScreen.attributes("-topmost", False)
+        SignatureScreen.resizable(False, False)
+        background = ttk.Label(SignatureScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__SignatureScreen, master=SignatureScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        btnHelp = ttk.Button(SignatureScreen, text=' Whats this? ', command=partial(self.display_msg, "SignatureScreen"))
+        btnHelp.place(x=20, y=20)
+
+        btnBack = ttk.Button(SignatureScreen, text=' Back ', command=self.MainScreen)
+        btnBack.place(x=20, y=60)
+
+        root = self.__MainWindow
+        frame = ScrollableFrame(700, 1700, root)
+        self.CurrentFrame = frame
+        sCanvas = frame.getCanvas()
+
+        rowPos = 90
+        colPos = 5
+        lineHeight = 25
+        colFileName = colPos
+        colExtension = colPos + 600
+        colDescription = colPos + 950
+        colMatch = colPos + 1350
+
+        textFileName = colFileName + 10
+        textExtension = colExtension + 10
+        textDescription = colDescription + 10
+        textMatch = colMatch + 10
+
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
+
+        qry_files = f"""SELECT * FROM FileSignatures WHERE FileSys='{self.chosenOffset.get()}'"""
+        cursor.execute(qry_files)
+        results = cursor.fetchall()
+
+        for r in results:
+            name = str(r[1])
+            name = name[0:45]
+            sCanvas.create_text(textFileName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=name)
+            sCanvas.create_text(textExtension, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[2])
+            sCanvas.create_text(textDescription, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[3])
+            sCanvas.create_text(textMatch, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[4])
+
+            rowPos = rowPos + lineHeight
+
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=250, y=140)
+
     def GetEXIF(self):
         """
         Method - GetEXIF
@@ -1096,9 +1381,14 @@ class ForensicGui():
         btnBack = ttk.Button(exifScreen, text=" Back ", command=self.GetExifFile)
         btnBack.place(x=69, y=56)
 
-        exif = ExifTags()
-        imgtags = exif.read_image_tags(self.EXIFfile.get())
-        gpstags = exif.read_gps_tags(self.EXIFfile.get())
+        imgtags = []
+        gpstags = []
+
+        f = open(self.EXIFfile.get(), "rb")
+        tags = exifread.process_file(f)
+        for tag in tags.keys():
+            if tag in ('Image Make', 'Image Model', 'Image Software'):
+                imgtags.append("%s" % (tags[tag]))
 
         lblMake = ttk.Label(exifScreen, text=imgtags[0], background="#D9D9D9", font=("Roboto", 16))
         lblMake.place(x=491, y=397)
@@ -1106,6 +1396,13 @@ class ForensicGui():
         lblModel.place(x=491, y=485)
         lblSoftware = ttk.Label(exifScreen, text=imgtags[2], background="#D9D9D9", font=("Roboto", 16))
         lblSoftware.place(x=645, y=575)
+
+        f = open(self.EXIFfile.get(), "rb")
+        tags = exifread.process_file(f)
+        for tag in tags.keys():
+            if tag in ('GPS GPSLatitudeRef', 'GPS GPSLatitude', 'GPS GPSLongitudeRef', 'GPS GPSLongitude',
+                       'GPS GPSAltitudeRef'):
+                gpstags.append("%s" % (tags[tag]))
 
         lblLatRef = ttk.Label(exifScreen, text=gpstags[0], background="#D9D9D9", font=("Roboto", 16))
         lblLatRef.place(x=1458, y=397)
@@ -1115,89 +1412,6 @@ class ForensicGui():
         lblLongRef.place(x=1492, y=575)
         lblLong = ttk.Label(exifScreen, text=gpstags[3], background="#D9D9D9", font=("Roboto", 16))
         lblLong.place(x=1429, y=673)
-
-    def FileCarver(self):
-        """
-        Method - FileCarver
-        -------------------
-        Purpose - This method is used to carve a file out of a file system into the host
-        computer. This first method asks the user for a file name and a directory to save it
-        to.
-        """
-
-        self.ClearWindow()
-        FileCarveScreen = self.__MainWindow
-        FileCarveScreen.title(self.__title)
-        FileCarveScreen.geometry(self.__screen_geometry)
-
-        FileCarveScreen.attributes("-topmost", False)
-        FileCarveScreen.resizable(False, False)
-        background = ttk.Label(FileCarveScreen, text="")
-        background.place(x=0, y=0)
-
-        logo = PhotoImage(file=self.__FileCarveScreen, master=FileCarveScreen)
-        background.config(image=logo)
-        background.img = logo
-        background.config(image=background.img)
-
-        entryFileName = ttk.Entry(FileCarveScreen, textvariable=self.FileToCarve)
-        entryFileName.place(x=810, y=190)
-
-        btnDone = ttk.Button(FileCarveScreen, text=' Carve ', command=self.FileCarverComplete)
-        btnDone.place(x=810, y=700)
-
-        btnHelp = ttk.Button(FileCarveScreen, text=' Whats this? ',
-                             command=partial(self.display_msg, "FileCarveScreen"))
-        btnHelp.place(x=1777, y=15)
-
-        btnBack = ttk.Button(FileCarveScreen, text=" Back ", command=self.MainScreen)
-        btnBack.place(x=42, y=317)
-
-    def FileCarverComplete(self):
-        """
-        Method - FileCarverComplete
-        ----------------------------
-        Purpose - This method is where the file is carved from the file system and
-        saved to the chosen directory.self The method uses pytsk3's FS_Info.open
-        to first locate the file and determine its size. It then reads the bytes of the
-        file and stores them in a variable. It then writes these bytes to a file on the
-        host computer.
-        """
-
-        self.ClearWindow()
-        FileCarveScreen = self.__MainWindow
-        FileCarveScreen.title(self.__title)
-        FileCarveScreen.geometry(self.__screen_geometry)
-
-        FileCarveScreen.attributes("-topmost", False)
-        FileCarveScreen.resizable(False, False)
-        background = ttk.Label(FileCarveScreen, text="")
-        background.place(x=0, y=0)
-
-        logo = PhotoImage(file=self.__FileCarveDoneScreen, master=FileCarveScreen)
-        background.config(image=logo)
-        background.img = logo
-        background.config(image=background.img)
-
-        if self.IsE01 is True:
-            filesys = pytsk3.FS_Info(self.img_info, int(self.chosenOffset.get()))
-        else:
-            filesys = pytsk3.FS_Info(self.diskimage, int(self.chosenOffset.get()))
-
-        file = filesys.open(self.FileToCarve.get())
-        filebytes = file.read_random(0, file.info.meta.size)
-
-        f = open("Carved File", "x")
-        f.close()
-
-        try:
-            with open("Carved File", 'wb') as carvedfile:
-                carvedfile.write(filebytes)
-        except:
-            messagebox.showerror("ERROR", "An error occurred opening the file!")
-
-        btnBack = ttk.Button(FileCarveScreen, text=" Back ", command=self.FileCarver)
-        btnBack.place(x=42, y=317)
 
     def get_hashes(self):
         self.ClearWindow()
@@ -1218,82 +1432,151 @@ class ForensicGui():
         lblBack = ttk.Button(GetHashScreen, text=" Back ", command=self.MainScreen)
         lblBack.place(x=396, y=1024)
 
-        entryFname = ttk.Entry(GetHashScreen, textvariable=self.HashFile)
-        entryFname.place(x=156, y=118)
+        entryFilename = ttk.Entry(GetHashScreen, textvariable=self.HashFile)
+        entryFilename.place(x=156, y=100)
+
+        btnFile = ttk.Button(GetHashScreen, text='Search by filename', command=self.hash_by_file)
+        btnFile.place(x=156, y=140)
+
         entryHash = ttk.Entry(GetHashScreen, textvariable=self.UserHash)
-        entryHash.place(x=156, y=398)
-        btnCompare = ttk.Button(GetHashScreen, text=" SHA256 ", command=self.SHA_hashing)
-        btnCompare.place(x=156, y=500)
-        btnCompare = ttk.Button(GetHashScreen, text=" MD5 ", command=self.MD5_hashing)
-        btnCompare.place(x=156, y=570)
+        entryHash.place(x=156, y=390)
+
+        btnMD5 = ttk.Button(GetHashScreen, text=' Search MD5 ', command=self.md5_hash)
+        btnMD5.place(x=156, y=450)
+
+        btnSHA = ttk.Button(GetHashScreen, text=' Search SHA256 ', command=self.sha256_hash)
+        btnSHA.place(x=156, y=510)
+
         btnHelp = ttk.Button(GetHashScreen, text=' Whats this? ', command=partial(self.display_msg, "GetHashScreen"))
         btnHelp.place(x=1777, y=15)
 
-    def MD5_hashing(self):
+    def hash_by_file(self):
         self.ClearWindow()
-        HashCompareScreen = self.__MainWindow
-        HashCompareScreen.title(self.__title)
-        HashCompareScreen.geometry(self.__screen_geometry)
+        FileHashScreen = self.__MainWindow
+        FileHashScreen.title(self.__title)
+        FileHashScreen.geometry(self.__screen_geometry)
 
-        HashCompareScreen.attributes("-topmost", False)
-        HashCompareScreen.resizable(False, False)
-        background = ttk.Label(HashCompareScreen, text="")
+        FileHashScreen.attributes("-topmost", False)
+        FileHashScreen.resizable(False, False)
+        background = ttk.Label(FileHashScreen, text="")
         background.place(x=0, y=0)
 
-        logo = PhotoImage(file=self.__HashingScreen, master=HashCompareScreen)
+        logo = PhotoImage(file=self.__FileHashScreen, master=FileHashScreen)
         background.config(image=logo)
         background.img = logo
         background.config(image=background.img)
 
-        lblBack = ttk.Button(HashCompareScreen, text=" Back ", command=self.MainScreen)
-        lblBack.place(x=396, y=1024)
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
 
-        if self.IsE01 is True:
-            hashing = HashVerify(self.img_info, int(self.chosenOffset.get()))
-        else:
-            hashing = HashVerify(self.diskimage, int(self.chosenOffset.get()))
+        qry_name = f"""SELECT * FROM FileHashes WHERE FileName='{self.HashFile.get()}'"""
+        cursor.execute(qry_name)
+        result = cursor.fetchall()
 
-        comparison = hashing.md5_compare(self.HashFile.get(), self.UserHash.get().upper())
+        labelText = f"We found {len(result)} files matching:"
+        lblCount = ttk.Label(FileHashScreen, text=labelText, background="#D9D9D9", font=("Roboto", 20))
+        lblCount.place(x=697, y=147)
 
-        if comparison is True:
-            Label(HashCompareScreen, text="Hashes match, integrity verified!", background="#D9D9D9",
-                  font=("Roboto", 26)).place(x=590, y=240)
-        else:
-            Label(HashCompareScreen, text="Hashes don't match, integrity can't be verified!", background="#D9D9D9",
-                  font=("Roboto", 26)).place(x=590, y=240)
+        ycord = 200
 
-    def SHA_hashing(self):
+        for r in result:
+            Label(FileHashScreen, text=f"Directory: {r[2]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+            ycord += 25
+            Label(FileHashScreen, text=f"MD5: {r[3]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+            ycord += 25
+            Label(FileHashScreen, text=f"SHA256: {r[4]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+            ycord += 50
+
+        lblBack = ttk.Button(FileHashScreen, text=" Back ", command=self.get_hashes)
+        lblBack.place(x=32, y=28)
+
+    def md5_hash(self):
         self.ClearWindow()
-        HashCompareScreen = self.__MainWindow
-        HashCompareScreen.title(self.__title)
-        HashCompareScreen.geometry(self.__screen_geometry)
+        MD5CompareScreen = self.__MainWindow
+        MD5CompareScreen.title(self.__title)
+        MD5CompareScreen.geometry(self.__screen_geometry)
 
-        HashCompareScreen.attributes("-topmost", False)
-        HashCompareScreen.resizable(False, False)
-        background = ttk.Label(HashCompareScreen, text="")
+        MD5CompareScreen.attributes("-topmost", False)
+        MD5CompareScreen.resizable(False, False)
+        background = ttk.Label(MD5CompareScreen, text="")
         background.place(x=0, y=0)
 
-        logo = PhotoImage(file=self.__HashingScreen, master=HashCompareScreen)
+        logo = PhotoImage(file=self.__MD5HashScreen, master=MD5CompareScreen)
         background.config(image=logo)
         background.img = logo
         background.config(image=background.img)
 
-        lblBack = ttk.Button(HashCompareScreen, text=" Back ", command=self.MainScreen)
-        lblBack.place(x=396, y=1024)
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
 
-        if self.IsE01 is True:
-            hashing = HashVerify(self.img_info, int(self.chosenOffset.get()))
+        qry_name = f"""SELECT * FROM FileHashes WHERE FileSys='{self.chosenOffset.get()}' AND MD5='{self.UserHash.get()}'"""
+        cursor.execute(qry_name)
+        result = cursor.fetchall()
+
+        if len(result) > 0:
+            labelText = f"We found {len(result)} files matching:"
+            lblCount = ttk.Label(MD5CompareScreen, text=labelText, background="#D9D9D9", font=("Roboto", 20))
+            lblCount.place(x=697, y=147)
+
+            ycord = 200
+
+            for r in result:
+                Label(MD5CompareScreen, text=f"Name: {r[1]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314,y=ycord)
+                ycord += 25
+                Label(MD5CompareScreen, text=f"Directory: {r[2]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314,y=ycord)
+                ycord += 25
+                Label(MD5CompareScreen, text=f"MD5: {r[3]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+                ycord += 50
+
         else:
-            hashing = HashVerify(self.diskimage, int(self.chosenOffset.get()))
+            Label(MD5CompareScreen, text="No hashes found", background="#D9D9D9", font=("Roboto", 20)).place(x=314,y=200)
 
-        comparison = hashing.sha_compare(self.HashFile.get(), self.UserHash.get().upper())
+        lblBack = ttk.Button(MD5CompareScreen, text=" Back ", command=self.get_hashes)
+        lblBack.place(x=32, y=28)
 
-        if comparison is True:
-            Label(HashCompareScreen, text="Hashes match, integrity verified!", background="#D9D9D9",
-                  font=("Roboto", 26))
+    def sha256_hash(self):
+        self.ClearWindow()
+        SHACompareScreen = self.__MainWindow
+        SHACompareScreen.title(self.__title)
+        SHACompareScreen.geometry(self.__screen_geometry)
+
+        SHACompareScreen.attributes("-topmost", False)
+        SHACompareScreen.resizable(False, False)
+        background = ttk.Label(SHACompareScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__SHAHashScreen, master=SHACompareScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
+
+        qry_name = f"""SELECT * FROM FileHashes WHERE FileSys='{self.chosenOffset.get()}' AND SHA256='{self.UserHash.get()}'"""
+        cursor.execute(qry_name)
+        result = cursor.fetchall()
+
+        if len(result) > 0:
+            labelText = f"We found {len(result)} files matching:"
+            lblCount = ttk.Label(SHACompareScreen, text=labelText, background="#D9D9D9", font=("Roboto", 20))
+            lblCount.place(x=697, y=147)
+
+            ycord = 200
+
+            for r in result:
+                Label(SHACompareScreen, text=f"Name: {r[1]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+                ycord += 25
+                Label(SHACompareScreen, text=f"Directory: {r[2]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314, y=ycord)
+                ycord += 25
+                Label(SHACompareScreen, text=f"SHA256: {r[4]}", background="#D9D9D9", font=("Roboto", 16)).place(x=314,y=ycord)
+                ycord += 50
+
         else:
-            Label(HashCompareScreen, text="Hashes don't match, integrity can't be verified!", background="#D9D9D9",
-                  font=("Roboto", 26))
+            Label(SHACompareScreen, text="No hashes found", background="#D9D9D9", font=("Roboto", 20)).place(x=314,y=200)
+
+        lblBack = ttk.Button(SHACompareScreen, text=" Back ", command=self.get_hashes)
+        lblBack.place(x=32, y=28)
 
     def display_msg(self, screen):
         if screen == "PartScreen":
@@ -1324,6 +1607,10 @@ class ForensicGui():
         elif screen == "GetHashScreen":
             messagebox.showinfo("Hashing", "Hashing is the process of using\n"
                                            "an algorithm to verify the integrity\nof a file")
+
+        elif screen == "SignatureScreen":
+            messagebox.showinfo("Signatures", """File signatures or "magic numbers" are bytes\n
+             in a file that identify the file. Used to verify an files extension is accurate""")
 
     def photo_viewer_first(self):
         self.ClearWindow()
@@ -1370,6 +1657,48 @@ class ForensicGui():
         menubar.add_cascade(menu=QuitMenu, label='Quit')
         QuitMenu.add_command(label='Go back', command=self.photo_viewer_first)
 
+    def FileCarver(self):
+        """
+        Method - FileCarver
+        -------------------
+        Purpose - This method is used to carve a file out of a file system into the host
+        computer. This first method asks the user for a file name and a directory to save it
+        to.
+        """
+
+        self.ClearWindow()
+        FileCarveScreen = self.__MainWindow
+        FileCarveScreen.title(self.__title)
+        FileCarveScreen.geometry(self.__screen_geometry)
+
+        FileCarveScreen.attributes("-topmost", False)
+        FileCarveScreen.resizable(False, False)
+        background = ttk.Label(FileCarveScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__FileCarveScreen, master=FileCarveScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        entryFileName = ttk.Entry(FileCarveScreen, textvariable=self.FileToCarve)
+        entryFileName.place(x=810, y=190)
+
+        btnDone = ttk.Button(FileCarveScreen, text=' Carve ', command=self.FileCarverComplete)
+        btnDone.place(x=810, y=700)
+
+        btnHelp = ttk.Button(FileCarveScreen, text=' Whats this? ',
+                             command=partial(self.display_msg, "FileCarveScreen"))
+        btnHelp.place(x=1777, y=15)
+
+        btnBack = ttk.Button(FileCarveScreen, text=" Back ", command=self.MainScreen)
+        btnBack.place(x=42, y=317)
+
+    def FileCarverComplete(self):
+        Carver = FileCarving(self.ChosenFile.get(), self.chosenOffset.get())
+        Carver.carve_specific(self.FileToCarve.get())
+        messagebox.showinfo("Carving", f"{self.FileToCarve.get()} has been carved")
+
     def CarveByTypeGet(self):
         self.ClearWindow()
         CarveTypeScreen = self.__MainWindow
@@ -1392,259 +1721,259 @@ class ForensicGui():
         entryType = ttk.Entry(CarveTypeScreen, textvariable=self.file_type)
         entryType.place(x=894, y=339)
 
-        btnCarve = ttk.Button(CarveTypeScreen, text=' Carve ', command=self.CarveTypeSystem)
+        btnCarve = ttk.Button(CarveTypeScreen, text=' Carve ', command=self.CarveSys)
         btnCarve.place(x=894, y=400)
 
         btnSystem = ttk.Button(CarveTypeScreen, text=' Carve system files', command=self.CarveTypeComplete)
         btnSystem.place(x=894, y=735)
 
-    def CarveTypeSystem(self):
-        dirname = f"{self.ChosenFile.get()}-File System files"
-        path = os.path.join("APDF Log", dirname)
-        os.mkdir(path)
-
-        count = 1
-        for offset in self.workingOffsets:
-            if self.IsE01 is True:
-                filesys = pytsk3.FS_Info(self.img_info, offset)
-            else:
-                filesys = pytsk3.FS_Info(self.diskimage, offset)
-
-            root_dir = filesys.open_dir(inode=filesys.info.root_inum)
-            for file in root_dir:
-                if file.info.meta != None:
-                    if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        dir_name = "/" + ascii_name
-                        dir = filesys.open_dir(dir_name)
-                        for file in dir:
-                            if file.info.meta != None:
-                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                                    pass
-                                else:
-                                    ascii_name = file.info.name.name.decode("ascii")
-                                    file = filesys.open(self.FileToCarve.get())
-                                    filebytes = file.read_random(0, file.info.meta.size)
-
-                                    for name in self.filesystemfiles:
-                                        if name.upper() == ascii_name:
-                                            try:
-                                                carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count})"
-                                                f = open(carvedname, "x")
-                                                f.close()
-                                            except:
-                                                count += 1
-                                                carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count})"
-                                                f = open(carvedname, "x")
-                                                f.close()
-
-                                            try:
-                                                with open(carvedname, 'wb') as carvedfile:
-                                                    carvedfile.write(filebytes)
-                                            except:
-                                                messagebox.showerror("ERROR", "An error occurred opening the file!")
-
-                                        else:
-                                            pass
-
-                                    else:
-                                        pass
-
-                    else:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        file = filesys.open(self.FileToCarve.get())
-                        filebytes = file.read_random(0, file.info.meta.size)
-                        for name in self.filesystemfiles:
-                            if name.upper() == ascii_name:
-                                try:
-                                    carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count})"
-                                    f = open(carvedname, "x")
-                                    f.close()
-                                except:
-                                    count += 1
-                                    carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count})"
-                                    f = open(carvedname, "x")
-                                    f.close()
-
-                                try:
-                                    with open(carvedname, 'wb') as carvedfile:
-                                        carvedfile.write(filebytes)
-                                except:
-                                    messagebox.showerror("ERROR", "An error occurred opening the file!")
-
-                        else:
-                            pass
-
-        messagebox.showinfo("Carve all", f"Your files were successfully carved\n and saved to: {path}")
-
     def CarveTypeComplete(self):
-        ftype = self.file_type.get().replace(".", "")
-        dirname = f"{self.ChosenFile.get()}-{ftype.upper()} files"
-        path = os.path.join("APDF Log", dirname)
-        os.mkdir(path)
-
-        count = 1
-        for offset in self.workingOffsets:
-            if self.IsE01 is True:
-                filesys = pytsk3.FS_Info(self.img_info, offset)
-            else:
-                filesys = pytsk3.FS_Info(self.diskimage, offset)
-
-            root_dir = filesys.open_dir(inode=filesys.info.root_inum)
-            for file in root_dir:
-                if file.info.meta != None:
-                    if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        dir_name = "/" + ascii_name
-                        dir = filesys.open_dir(dir_name)
-                        for file in dir:
-                            if file.info.meta != None:
-                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                                    pass
-                                else:
-                                    ascii_name = file.info.name.name.decode("ascii")
-                                    file = filesys.open(self.FileToCarve.get())
-                                    filebytes = file.read_random(0, file.info.meta.size)
-                                    extension = GetExt(ascii_name)
-                                    if extension.get() is None:
-                                        ext = ""
-                                    else:
-                                        ext = extension.get()
-
-                                    if ext.upper() == self.file_type.get().upper():
-
-                                        try:
-                                            carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                            f = open(carvedname, "x")
-                                            f.close()
-                                        except:
-                                            count += 1
-                                            carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                            f = open(carvedname, "x")
-                                            f.close()
-
-                                        try:
-                                            with open(carvedname, 'wb') as carvedfile:
-                                                carvedfile.write(filebytes)
-                                        except:
-                                            messagebox.showerror("ERROR", "An error occurred opening the file!")
-
-                                    else:
-                                        pass
-
-                    else:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        file = filesys.open(self.FileToCarve.get())
-                        filebytes = file.read_random(0, file.info.meta.size)
-                        extension = GetExt(ascii_name)
-                        if extension.get() is None:
-                            ext = ""
-                        else:
-                            ext = extension.get()
-
-                        if ext.upper() == self.file_type.get().upper():
-
-                            try:
-                                carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                f = open(carvedname, "x")
-                                f.close()
-                            except:
-                                count += 1
-                                carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                f = open(carvedname, "x")
-                                f.close()
-
-                            try:
-                                with open(carvedname, 'wb') as carvedfile:
-                                    carvedfile.write(filebytes)
-                            except:
-                                messagebox.showerror("ERROR", "An error occurred opening the file!")
-
-                        else:
-                            pass
-
-        messagebox.showinfo("Carve all", f"Your files were successfully carved\n and saved to: {path}")
+        Carver = FileCarving(self.ChosenFile.get(), self.chosenOffset.get())
+        Carver.carve_type(self.file_type.get())
+        messagebox.showinfo("Carving", f"All {self.file_type.get()} files have been carved")
 
     def CarveAll(self):
-        try:
-            dirname = f"{self.ChosenFile.get()}-All Carved files"
-            path = os.path.join("APDF Log", dirname)
-            os.mkdir(path)
-        except:
-            dirname = "APDF Log"
-            path = os.getcwd() + "\\" + dirname
+        Carver = FileCarving(self.ChosenFile.get(), self.chosenOffset.get())
+        Carver.carve_all()
+        messagebox.showinfo("Carving", f"All files from {self.chosenOffset.get()}\n have been carved")
 
-        count = 1
-        for offset in self.workingOffsets:
-            if self.IsE01 is True:
-                filesys = pytsk3.FS_Info(self.img_info, offset)
-            else:
-                filesys = pytsk3.FS_Info(self.diskimage, offset)
+    def CarveSys(self):
+        Carver = FileCarving(self.ChosenFile.get(), self.chosenOffset.get())
+        Carver.carve_system()
+        messagebox.showinfo("Carving", "All system files have been carved")
 
-            root_dir = filesys.open_dir(inode=filesys.info.root_inum)
-            for file in root_dir:
-                if file.info.meta != None:
-                    if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        dir_name = "/" + ascii_name
-                        dir = filesys.open_dir(dir_name)
-                        for file in dir:
-                            if file.info.meta != None:
-                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                                    pass
-                                else:
-                                    ascii_name = file.info.name.name.decode("ascii")
-                                    file = filesys.open(self.FileToCarve.get())
-                                    filebytes = file.read_random(0, file.info.meta.size)
-                                    extension = GetExt(ascii_name)
-                                    if extension.get() is None:
-                                        ext = ""
-                                    else:
-                                        ext = extension.get()
+    def boot_view_screen(self):
+        self.ClearWindow()
+        HexViewScreen = self.__MainWindow
+        HexViewScreen.title(self.__title)
+        HexViewScreen.geometry(self.__screen_geometry)
 
-                                    try:
-                                        carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                        f = open(carvedname, "x")
-                                        f.close()
-                                    except:
-                                        count += 1
-                                        carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                                        f = open(carvedname, "x")
-                                        f.close()
+        HexViewScreen.attributes("-topmost", False)
+        HexViewScreen.resizable(False, False)
+        background = ttk.Label(HexViewScreen, text="")
+        background.place(x=0, y=0)
 
-                                    try:
-                                        with open(carvedname, 'wb') as carvedfile:
-                                            carvedfile.write(filebytes)
-                                    except:
-                                        messagebox.showerror("ERROR", "An error occurred opening the file!")
+        logo = PhotoImage(file=self.__HexScreen, master=HexViewScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
 
-                    else:
-                        ascii_name = file.info.name.name.decode("ascii")
-                        file = filesys.open(self.FileToCarve.get())
-                        filebytes = file.read_random(0, file.info.meta.size)
-                        extension = GetExt(ascii_name)
-                        if extension.get() is None:
-                            ext = ""
-                        else:
-                            ext = extension.get()
+        btnBack = ttk.Button(HexViewScreen, text='Back',command=self.MainScreen)
+        btnBack.place(x=22, y=28)
 
-                        try:
-                            carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                            f = open(carvedname, "x")
-                            f.close()
-                        except:
-                            count += 1
-                            carvedname = f"{path}/Carved file - {ascii_name} from {offset} ({count}){ext}"
-                            f = open(carvedname, "x")
-                            f.close()
+        btnHex = ttk.Button(HexViewScreen, text='Show hex', command=self.OpenDialog)
+        btnHex.place(x=22, y=80)
 
-                        try:
-                            with open(carvedname, 'wb') as carvedfile:
-                                carvedfile.write(filebytes)
-                        except:
-                            messagebox.showerror("ERROR", "An error occurred opening the file!")
+        lblScheme = ttk.Label(HexViewScreen, text=self.part_scheme, font=("Roboto", 22))
+        lblScheme.place(x=748, y=243)
 
-        messagebox.showinfo("Carve all", f"Your files were successfuly carved\n and saved to: {path}")
+        self.filesize.set("size on disk in bytes")
+        lblFilesize = Label(HexViewScreen, textvariable=self.filesize, background="#D9D9D9", wraplength=555, justify="left")
+        lblFilesize.config(font=("Roboto", 12))
+        lblFilesize.place(x=612, y=913)
+
+        lblCurrentSector = Label(HexViewScreen, textvariable=self.currentSector, background="#D9D9D9", wraplength=555,
+                                 justify="left")
+        lblCurrentSector.config(font=("Roboto", 12))
+        lblCurrentSector.place(x=811, y=455)
+
+        btnNextSector = ttk.Button(HexViewScreen, command=self.nextSector, text=" Next Sector ").place(x=611, y=455)
+        btnPrevSector = ttk.Button(HexViewScreen, command=self.prevSector, text=" Prev Sector ").place(x=711, y=455)
+
+    def showChar(self, v):
+        if v >= 32 and v <= 126:
+            return chr(v)
+        else:
+            return '*'
+
+    def readSector(self, sectorN):
+        with open(self.ChosenFile.get(), "rb") as file:
+            try:
+                file.seek(sectorN * 512, os.SEEK_SET)
+                block = file.read(512)
+                return block
+            except ValueError:  # Empty offsetSpinbox
+                return
+
+    def OpenDialog(self):
+        size = os.path.getsize(self.ChosenFile.get())
+        sectors = math.ceil(size / 512) - 1
+        self.numberOfSectors = sectors
+        self.currentSelectedSector = 0
+        block = self.readSector(0)
+
+        self.filesize.set(str(size) + " bytes and " + str(sectors) + " sectors")
+        self.currentSector.set("Current Sector = 0")
+
+        self.showSector(block)
+
+    def hexViewer(self):
+        frame = self.CreateTopFrame("hexviewertop.png")
+        self.CurrentFrame = frame
+
+        self.filesize.set("size on disk in bytes")
+        btnOpenDialog = ttk.Button(frame, command=self.OpenDialog, text=" Select File ").place(x=31, y=40)
+        lblFilesize = Label(frame, textvariable=self.filesize, bg="#000000", fg="white", wraplength=555, justify="left")
+        lblFilesize.config(font=("Roboto", 12))
+        lblFilesize.place(x=120, y=39)
+
+        lblCurrentSector = Label(frame, textvariable=self.currentSector, bg="#000000", fg="white", wraplength=555,
+                                 justify="left")
+        lblCurrentSector.config(font=("Roboto", 12))
+        lblCurrentSector.place(x=420, y=39)
+
+        btnNextSector = ttk.Button(frame, command=self.nextSector, text=" Next Sector ").place(x=400, y=98)
+        btnPrevSector = ttk.Button(frame, command=self.prevSector, text=" Prev Sector ").place(x=495, y=98)
+
+    def nextSector(self):
+        tmpSector = self.currentSelectedSector + 1
+        if tmpSector < self.numberOfSectors:
+            self.currentSelectedSector = tmpSector
+            block = self.readSector(tmpSector)
+            self.currentSector.set("Current Sector = " + str(tmpSector))
+            self.showSector(block)
+
+    def prevSector(self):
+        tmpSector = self.currentSelectedSector - 1
+        if tmpSector >= 0:
+            self.currentSelectedSector = tmpSector
+            block = self.readSector(tmpSector)
+            self.currentSector.set("Current Sector = " + str(tmpSector))
+            self.showSector(block)
+
+    def showSector(self, random_bytes):
+        root = self.__MainWindow
+
+        if self.BottomFrame != None:
+            self.BottomFrame.destroy()
+
+        frame = ScrollableFrame(353, 682, root)
+
+        self.BottomFrame = frame
+
+        sCanvas = frame.getCanvas()
+
+        rowPos = 10
+        colPos = 60
+        lineHeight = 25
+
+        for i in range(32):
+            # yellow hex val = efba04
+            byteOffsetInFile = (i * 16) + (int(self.currentSelectedSector) * 512)
+            offset = (i * 16)
+            colPos = 60
+            theOffset = "{:04X}".format(byteOffsetInFile)
+            sCanvas.create_text(5, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=theOffset)
+            charLine = ""
+            for j in range(16):
+                theCharOffset = offset + j
+
+                theCharAsHex = "{:02X}".format(random_bytes[theCharOffset])
+                charLine = charLine + self.showChar(random_bytes[theCharOffset])
+                sCanvas.create_text(colPos, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=theCharAsHex)
+                colPos = colPos + 25
+
+            sCanvas.create_text(500, rowPos, fill="#000000", justify=LEFT, anchor="nw", text=charLine)
+            rowPos = rowPos + lineHeight
+
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=606, y=486)
+
+    def CreateTopFrame(self, ImageFileName):
+        """
+            ************************************************************************************************
+            METHOD: CreateFrame(self,ImageFileName)
+            ************************************************************************************************
+            This is a public method that is called when a new screen is made to set up the Tkinter frame
+            for it, the background image for it is passed in as a parameter
+                - parameters
+                    ImageFileName
+
+                - return
+                    none
+
+                - return type
+                    none
+
+            **************************************************************************************************
+            """
+        menuScreen = self.__MainWindow
+
+        frame = Frame(menuScreen, width=688, height=136, bg='#001636', )
+        frame.pack(side=LEFT)
+
+        background_label = ttk.Label(frame, borderwidth=0, text="")
+        background_label.place(x=0, y=0)
+
+        logo = PhotoImage(file=ImageFileName)  # load the image from the file
+        background_label.config(image=logo)
+        background_label.img = logo
+        background_label.config(image=background_label.img)
+        frame.place(x=26, y=200)
+        return frame
+
+    def registry_info(self):
+        self.ClearWindow()
+        RegScreen = self.__MainWindow
+        RegScreen.title(self.__title)
+        RegScreen.geometry(self.__screen_geometry)
+
+        RegScreen.attributes("-topmost", False)
+        RegScreen.resizable(False, False)
+        background = ttk.Label(RegScreen, text="")
+        background.place(x=0, y=0)
+
+        logo = PhotoImage(file=self.__RegScreen, master=RegScreen)
+        background.config(image=logo)
+        background.img = logo
+        background.config(image=background.img)
+
+        btnBack = ttk.Button(RegScreen, text='Back', command=self.MainScreen)
+        btnBack.place(x=25, y=28)
+
+        lblOS = ttk.Label(RegScreen, text=self.OS_name, background="#D9D9D9", font=("Roboto", 20))
+        lblOS.place(x=813, y=215)
+
+        root = self.__MainWindow
+        frame = ScrollableFrame(700, 1500, root)
+        self.CurrentFrame = frame
+        sCanvas = frame.getCanvas()
+
+        rowPos = 90
+        colPos = 5
+        lineHeight = 25
+        textRowPos = 40
+
+        colUser = colPos
+        colName = colPos + 200
+        colURL = colPos + 600
+
+        textUser = colUser + 10
+        textName = colName + 10
+        textURL = colURL + 10
+
+        sCanvas.create_text(textUser, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="User")
+        sCanvas.create_text(textName, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="Name")
+        sCanvas.create_text(textURL, textRowPos, fill="#000000", justify=LEFT, anchor="nw", text="URL")
+
+        connection = sqlite3.connect("APDF Log\\APDF report.db")
+        cursor = connection.cursor()
+        query = """SELECT * FROM TypedURLS"""
+        cursor.execute(query)
+        results = cursor.fetchall()
+
+        for r in results:
+            sCanvas.create_text(textUser, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[0])
+            sCanvas.create_text(textName, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[1])
+            sCanvas.create_text(textURL, rowPos, font=("Roboto", 16), fill="#000000", justify=LEFT, anchor="nw",
+                                text=r[2])
+
+            rowPos = rowPos + lineHeight
+
+        frame.refreshCanvas(sCanvas)
+        frame.place(x=250, y=265)
 
 
 """This is where the program is ran from, it instantiates the class"""

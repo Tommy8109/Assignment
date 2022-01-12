@@ -27,3 +27,4 @@ class E01Handler(pytsk3.Img_Info):
         self.InfoList.append(forensic_image.get_hash_values())
 
         return self.InfoList
+

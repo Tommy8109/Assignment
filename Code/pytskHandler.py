@@ -2,16 +2,17 @@ import sqlite3
 import pytsk3
 import pyewf
 from E01_Handler import E01Handler
-from RegistryAnalyse import RegGet
-from SigAnalyse import Analyse
+import re
 import os
 from datetime import datetime
+from datetime import date
 import hashlib
-import re
+from Registry import Registry
 
 
 class PytskInfo():
     def __init__(self, file, imgtype):
+        self.processed_image = file
         if imgtype == "E01":
             filenames = pyewf.glob(file)
             self.ewf_handle = pyewf.handle()
@@ -29,7 +30,6 @@ class PytskInfo():
 
         self.connection = object
         self.cursor = object
-        self.IsE01 = bool
         self.LogDirectory = ""
         self.start_offsets = []
         self.failed_fs = []
@@ -39,11 +39,18 @@ class PytskInfo():
         self.files = []
         self.root_files = []
         self.root_dirs = []
+        self.root_inums = []
+        self.total_dirs = 0
+        self.total_files = 0
 
         self.ext_pattern = r"(\.)(.*)"
-        self.db_pattern = r"(\(')(\w*)(',')([a-f0-9]*)(',')(\w*)"
         self.extension = ""
-        self.fs_sig = ""
+
+        self.user_directories = []
+        self.ntuser_paths = []
+        self.path = "/Documents and Settings"
+        self.registry_offset = []
+        self.product_name = ""
 
     def sql_setup(self):
         try:
@@ -112,19 +119,30 @@ class PytskInfo():
         OwnerGID INTEGER,
         Size INTEGER,
         Deleted VARCHAR,
-        ParentDirectory TEXT);"""
+        ParentDirectory TEXT,
+        FileType TEXT);"""
 
         hash_command = """
         CREATE TABLE FileHashes (
         FileSys TEXT,
         FileName TEXT,
-        Hash VARCHAR);"""
+        ParentDirectory TEXT,
+        MD5 VARCHAR,
+        SHA256);"""
 
         sig_command = """
         CREATE TABLE FileSignatures (
         FileSys TEXT,
         FileName TEXT,
+        Extension TEXT,
+        Description TEXT,
         Match TEXT);"""
+
+        url_command = """
+        CREATE TABLE TypedURLS(
+        User TEXT,
+        Name TEXT,
+        URL TEXT);"""
 
         self.cursor.execute(part_command)
         self.cursor.execute(filesys_command)
@@ -133,6 +151,22 @@ class PytskInfo():
         self.cursor.execute(basic_command)
         self.cursor.execute(hash_command)
         self.cursor.execute(sig_command)
+        self.cursor.execute(url_command)
+
+        today = date.today()
+        current_date = today.strftime("%d/%m/%Y")
+        f = open("APDF Log\\README.txt", "x")
+        line1 = "APDF report folder\n"
+        line5 = "--------------------\n"
+        line2 = f"Date created: {current_date}\n"
+        line3 = f"Image used: {self.processed_image}\n"
+        line4 = "This folder contains the report and carved files\n"
+        f.write(line1)
+        f.write(line5)
+        f.write(line2)
+        f.write(line3)
+        f.write(line4)
+        f.close()
 
     def basic_info(self):
         size = self.img_info.get_size()
@@ -166,8 +200,6 @@ class PytskInfo():
         self.cursor.execute(sql_command, data_tuple)
         self.connection.commit()
 
-        return data_tuple
-
     def partitions(self):
         if self.vol_info.info.vstype == pytsk3.TSK_VS_TYPE_DOS:
             part_scheme = "MBR"
@@ -193,9 +225,6 @@ class PytskInfo():
             self.cursor.execute(sql_command, data_tuple)
             self.connection.commit()
 
-        data_tuple = (count, type, start, offset, sectors, part_scheme)
-        return data_tuple
-
     def file_systems(self):
         count = 0
         for offset in self.start_offsets:
@@ -220,8 +249,6 @@ class PytskInfo():
                 MetaRecords = fs_info.info.inum_count
                 Flags = fs_info.info.flags
                 Root = fs_info.info.root_inum
-                fs_size = fs_info.info.block_count + fs_info.info.block_size
-                self.fs_sizes.append(fs_size)
 
                 sql_command = """
                 INSERT INTO FileSystems (Count, Type, Clusters, ClusterSize, Endianness, MetaRecords, Flags, RootInum)
@@ -258,6 +285,8 @@ class PytskInfo():
                         dir_count += 1
                         file_in_dir += 1
                         ascii_name = file.info.name.name.decode("ascii")
+                        if ascii_name == "Documents and Settings":
+                            self.registry_offset.append(offset)
                         self.directories.append(ascii_name)
                         self.root_dirs.append(ascii_name)
                         sql_command = """
@@ -278,6 +307,8 @@ class PytskInfo():
                                     dir_count += 1
                                     file_in_dir += 1
                                     ascii_name = file.info.name.name.decode("ascii")
+                                    if ascii_name == "Documents and Settings":
+                                        self.registry_offset.append(offset)
                                     self.directories.append(ascii_name)
                                     sql_command = """
                                     INSERT INTO RootDirectory (FileSys, Name, FoundIn, Type)
@@ -288,6 +319,46 @@ class PytskInfo():
                                     self.cursor.execute(sql_command, data_tuple)
                                     self.connection.commit()
 
+                                    subdirectory = "/" + ascii_name
+                                    try:
+                                        subdir = fs_info.open_dir(subdirectory)
+
+                                        for file_2 in subdir:
+                                            if file_2.info.meta != None:
+                                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                                                    file_type = "Directory"
+                                                    dir_count += 1
+                                                    file_in_dir += 1
+                                                    ascii_name = file_2.info.name.name.decode("ascii")
+                                                    if ascii_name == "Documents and Settings":
+                                                        self.registry_offset.append(offset)
+                                                    self.directories.append(ascii_name)
+                                                    sql_command = """
+                                                    INSERT INTO RootDirectory (FileSys, Name, FoundIn, Type)
+                                                    VALUES (?,?,?,?);"""
+
+                                                    data_tuple = (offset, ascii_name, directory, file_type)
+
+                                                    self.cursor.execute(sql_command, data_tuple)
+                                                    self.connection.commit()
+
+                                                else:
+                                                    file_type = "File"
+                                                    file_count += 1
+                                                    ascii_name = file_2.info.name.name.decode("ascii")
+                                                    self.files.append(ascii_name)
+
+                                                    sql_command = """
+                                                       INSERT INTO RootDirectory (FileSys,Name,FoundIn,Type)
+                                                       VALUES (?,?,?,?);"""
+
+                                                    data_tuple = (offset, ascii_name, directory, file_type)
+
+                                                    self.cursor.execute(sql_command, data_tuple)
+                                                    self.connection.commit()
+                                    except:
+                                        pass
+
                                 else:
                                     file_type = "File"
                                     file_count += 1
@@ -295,8 +366,8 @@ class PytskInfo():
                                     self.files.append(ascii_name)
 
                                     sql_command = """
-                                                       INSERT INTO RootDirectory (FileSys,Name,FoundIn,Type)
-                                                       VALUES (?,?,?,?);"""
+                                       INSERT INTO RootDirectory (FileSys,Name,FoundIn,Type)
+                                       VALUES (?,?,?,?);"""
 
                                     data_tuple = (offset, ascii_name, directory, file_type)
 
@@ -326,7 +397,6 @@ class PytskInfo():
             for file in root_dir:
                 if file.info.meta != None:
                     if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-
                         ascii_name = file.info.name.name.decode("ascii")
                         directory = "/" + ascii_name
                         dir = fs_info.open_dir(directory)
@@ -334,7 +404,61 @@ class PytskInfo():
                         for file in dir:
                             if file.info.meta != None:
                                 if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
-                                    pass
+                                    subdirectory = "/" + ascii_name
+                                    try:
+                                        subdir = fs_info.open_dir(subdirectory)
+
+                                        for file_2 in subdir:
+                                            if file_2.info.meta != None:
+                                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                                                    pass
+
+                                                else:
+                                                    parent_dir = subdirectory
+                                                    file_meta = file.info.meta
+                                                    file_name = file.info.name
+                                                    ascii_name = file_name.name.decode("ascii")
+                                                    acc_time = datetime.utcfromtimestamp(file_meta.atime)
+                                                    crt_time = datetime.utcfromtimestamp(file_meta.crtime)
+                                                    meta_time = datetime.utcfromtimestamp(file_meta.ctime)
+                                                    mod_time = datetime.utcfromtimestamp(file_meta.mtime)
+                                                    type = file_name.type
+                                                    MetaAddr = file_meta.addr
+                                                    ownergid = file_meta.gid
+                                                    size = file_meta.size
+                                                    if file_meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC:
+                                                        deleted = "Yes"
+                                                    else:
+                                                        deleted = "No"
+
+                                                    extension_regex = re.compile(self.ext_pattern)
+                                                    extension_match = extension_regex.search(
+                                                        file.info.name.name.decode("ascii").lower())
+                                                    if extension_match is not None:
+                                                        file_extension = extension_match.group(2)
+
+                                                        sql_command = """
+                                                            INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                                                        data_tuple = (
+                                                        offset, ascii_name, type, MetaAddr, acc_time, crt_time,
+                                                        mod_time, meta_time, ownergid, size, deleted, parent_dir,
+                                                        file_extension)
+
+                                                    else:
+                                                        sql_command = """
+                                                            INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                                                        data_tuple = (
+                                                        offset, ascii_name, type, MetaAddr, acc_time, crt_time,
+                                                        mod_time, meta_time, ownergid, size, deleted, parent_dir, "N/A")
+
+                                                    self.cursor.execute(sql_command, data_tuple)
+                                                    self.connection.commit()
+                                    except:
+                                        pass
 
                                 else:
                                     parent_dir = directory
@@ -354,11 +478,23 @@ class PytskInfo():
                                     else:
                                         deleted = "No"
 
-                                    sql_command = """
-                                    INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?);"""
+                                    extension_regex = re.compile(self.ext_pattern)
+                                    extension_match = extension_regex.search(file.info.name.name.decode("ascii").lower())
+                                    if extension_match is not None:
+                                        file_extension = extension_match.group(2)
 
-                                    data_tuple = (offset,ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
+                                        sql_command = """
+                                            INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                                        data_tuple = (offset,ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir, file_extension)
+
+                                    else:
+                                        sql_command = """
+                                            INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                                        data_tuple = (offset, ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir, "N/A")
 
                                     self.cursor.execute(sql_command, data_tuple)
                                     self.connection.commit()
@@ -381,17 +517,30 @@ class PytskInfo():
                         else:
                             deleted = "No"
 
-                        sql_command = """
-                               INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?);"""
+                        extension_regex = re.compile(self.ext_pattern)
+                        extension_match = extension_regex.search(ascii_name)
+                        if extension_match is not None:
+                            file_extension = extension_match.group(2)
 
-                        data_tuple = (offset,ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir)
+                            sql_command = """
+                                INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                            data_tuple = (offset, ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir, file_extension)
+
+                        else:
+                            sql_command = """
+                                INSERT INTO RootMeta (Offset,Name, Type, MetaRecordNum, AccessTime, CreateTime, ModifiedTime, MetaChangeTime, OwnerGID, Size, Deleted, ParentDirectory, FileType)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);"""
+
+                            data_tuple = (offset, ascii_name, type, MetaAddr, acc_time, crt_time, mod_time, meta_time, ownergid, size, deleted, parent_dir, "N/A")
 
                         self.cursor.execute(sql_command, data_tuple)
                         self.connection.commit()
 
     def hash_files(self):
         for offset in self.working_offsets:
+            fsoffset = offset
             fs_info = pytsk3.FS_Info(self.img_info, offset)
             root = fs_info.open_dir(inode=fs_info.info.root_inum)
             for file in root:
@@ -412,21 +561,23 @@ class PytskInfo():
                                     chunk_size = 1024
                                     offset = 0
                                     md5_hash = hashlib.md5()
+                                    sha_hash = hashlib.sha256()
 
                                     while file_size > 0:
                                         data = file.read_random(offset, min(chunk_size, file_size))
                                         md5_hash.update(data)
-                                        offset +=  chunk_size
+                                        sha_hash.update(data)
+                                        offset += chunk_size
                                         file_size -= chunk_size
 
-                                    hashVal = md5_hash.hexdigest().upper()
+                                    md5_val = md5_hash.hexdigest().upper()
+                                    sha_val = sha_hash.hexdigest().upper()
 
                                     sql_command = """
-                                       INSERT INTO FileHashes (Filesys, FileName, Hash)
-                                       VALUES (?,?,?);"""
+                                       INSERT INTO FileHashes (Filesys, FileName, ParentDirectory, MD5, SHA256)
+                                       VALUES (?,?,?,?,?);"""
 
-                                    data_tuple = (offset, ascii_name, str(hashVal))
-
+                                    data_tuple = (fsoffset, ascii_name, directory, str(md5_val), str(sha_val))
                                     self.cursor.execute(sql_command, data_tuple)
                                     self.connection.commit()
 
@@ -437,23 +588,193 @@ class PytskInfo():
                         chunk_size = 1024
                         offset = 0
                         md5_hash = hashlib.md5()
+                        sha_hash = hashlib.sha256()
 
                         while file_size > 0:
                             data = file.read_random(offset, min(chunk_size, file_size))
                             md5_hash.update(data)
+                            sha_hash.update(data)
                             offset += chunk_size
                             file_size -= chunk_size
 
-                        hashVal = md5_hash.hexdigest().upper()
+                        md5_val = md5_hash.hexdigest().upper()
+                        sha_val = sha_hash.hexdigest().upper()
 
                         sql_command = """
-                           INSERT INTO FileHashes (Filesys, FileName, Hash)
-                           VALUES (?,?,?);"""
+                           INSERT INTO FileHashes (Filesys, FileName, ParentDirectory, MD5, SHA256)
+                           VALUES (?,?,?,?,?);"""
 
-                        data_tuple = (offset, ascii_name, str(hashVal))
+                        data_tuple = (fsoffset, ascii_name, "Root", str(md5_val), str(sha_val))
 
                         self.cursor.execute(sql_command, data_tuple)
                         self.connection.commit()
+
+    def file_signatures(self):
+        for offset in self.working_offsets:
+            fs_info = pytsk3.FS_Info(self.img_info, offset)
+            root_dir = fs_info.open_dir(inode=fs_info.info.root_inum)
+            for file in root_dir:
+                if file.info.meta != None:
+                    if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                        ascii_name = file.info.name.name.decode("ascii")
+                        directory = "/" + ascii_name
+                        dir = fs_info.open_dir(directory)
+                        for file in dir:
+                            if file.info.meta != None:
+                                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_REG:
+                                    extension_regex = re.compile(self.ext_pattern)
+                                    extension_match = extension_regex.search(file.info.name.name.decode("ascii").lower())
+                                    if extension_match is not None:
+                                        self.extension = extension_match.group(2)
+
+                                        connection = sqlite3.connect("Signatures.db")
+                                        cursor = connection.cursor()
+
+                                        queryExtension = f"SELECT * FROM Signatures WHERE Extension='{self.extension.upper()}'"
+                                        cursor.execute(queryExtension)
+                                        result = cursor.fetchall()
+
+                                        for r in result:
+                                            signature = str(r[0]).replace(" ", "\\x")
+                                            signature = "\\x" + signature
+                                            sig_regex = re.compile("^" + signature, re.DOTALL)
+                                            try:
+                                                file_bytes = file.read_random(0, file.info.meta.size)
+                                                sig_match = sig_regex.search(file_bytes.decode('latin-1'))
+
+                                                if sig_match is not None:
+                                                    try:
+                                                        sql_command = """
+                                                           INSERT INTO FileSignatures (Filesys, FileName, Extension, Description, Match)
+                                                           VALUES (?,?,?,?,?);"""
+
+                                                        data_tuple = (offset, file.info.name.name.decode("ascii"), self.extension, r[2], "Yes")
+
+                                                        self.cursor.execute(sql_command, data_tuple)
+                                                        self.connection.commit()
+                                                    except:
+                                                        pass
+                                                else:
+                                                    sql_command = """
+                                                       INSERT INTO FileSignatures (Filesys, FileName, Extension, Description, Match)
+                                                       VALUES (?,?,?,?,?);"""
+
+                                                    data_tuple = (offset, file.info.name.name.decode("ascii"), self.extension, "Skipped", "Skipped")
+
+                                                    self.cursor.execute(sql_command, data_tuple)
+                                                    self.connection.commit()
+                                            except:
+                                                pass
+
+                    else:
+                        extension_regex = re.compile(self.ext_pattern)
+                        extension_match = extension_regex.search(file.info.name.name.decode("ascii").lower())
+                        if extension_match is not None:
+                            self.extension = extension_match.group(2)
+
+                            connection = sqlite3.connect("Signatures.db")
+                            cursor = connection.cursor()
+
+                            queryExtension = f"SELECT * FROM Signatures WHERE Extension='{self.extension.upper()}'"
+                            cursor.execute(queryExtension)
+                            result = cursor.fetchall()
+
+                            for r in result:
+                                signature = str(r[0]).replace(" ", "\\x")
+                                signature = "\\x" + signature
+                                sig_regex = re.compile("^" + signature, re.DOTALL)
+                                try:
+                                    file_bytes = file.read_random(0, file.info.meta.size)
+                                    sig_match = sig_regex.search(file_bytes.decode('latin-1'))
+
+                                    if sig_match is not None:
+                                        try:
+                                            sql_command = """
+                                               INSERT INTO FileSignatures (Filesys, FileName, Extension, Description, Match)
+                                               VALUES (?,?,?,?,?);"""
+
+                                            data_tuple = (offset, file.info.name.name.decode("ascii"), self.extension, r[2], "Yes")
+
+                                            self.cursor.execute(sql_command, data_tuple)
+                                            self.connection.commit()
+                                        except:
+                                            pass
+
+                                    else:
+                                        sql_command = """
+                                           INSERT INTO FileSignatures (Filesys, FileName, Extension, Description, Match)
+                                           VALUES (?,?,?,?,?);"""
+
+                                        data_tuple = (offset, file.info.name.name.decode("ascii"), self.extension, "Skipped", "Skipped")
+
+                                        self.cursor.execute(sql_command, data_tuple)
+                                        self.connection.commit()
+
+                                except:
+                                    pass
+
+    def write_registry(self, offset):
+        try:
+            fs = pytsk3.FS_Info(self.img_info, offset)
+            software_file = fs.open('/Windows/system32/config/software')
+            software_bytes = software_file.read_random(0, software_file.info.meta.size)
+            f = open('SOFTWARE', 'wb')
+            f.write(software_bytes)
+            f.close()
+        except:
+            pass
+
+        self.get_product_name(offset)
+
+    def get_product_name(self, offset):
+        try:
+            software_reg = Registry.Registry('SOFTWARE')
+        except FileNotFoundError:
+            self.write_registry(offset)
+
+        key_path = software_reg.open('Microsoft\\Windows NT\\CurrentVersion')
+        product_name = key_path['ProductName']
+
+        self.product_name = product_name.value()
+
+        self.user_paths(offset)
+
+    def user_paths(self, offset):
+        default_dirs = ["Administrator", "All Users", "Default User", "LocalService", "NetworkService", ".", ".."]
+        fs = pytsk3.FS_Info(self.img_info, offset)
+        root_dir = fs.open_dir(self.path)
+        for file in root_dir:
+            if file.info.meta != None:
+                if file.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                    ascii_name = file.info.name.name.decode("ascii")
+                    if ascii_name not in default_dirs:
+                        self.user_directories.append(ascii_name)
+                else:
+                    pass
+
+        self.ntuser_files(offset)
+
+    def ntuser_files(self, offset):
+        fs = pytsk3.FS_Info(self.img_info, offset)
+        for user_dir in self.user_directories:
+            user_dat_path = self.path + "/" + str(user_dir) + "/NTUSER.DAT"
+            ntuser_file = fs.open(user_dat_path)
+            ntuser_bytes = ntuser_file.read_random(0, ntuser_file.info.meta.size)
+            f = open("NTUSER.DAT", "wb")
+            f.write(ntuser_bytes)
+            f.close()
+
+            ntuser_reg = Registry.Registry('NTUSER.DAT')
+            url_key = ntuser_reg.open('Software\\Microsoft\\INTERNET Explorer\\TypedURLs')
+            for val in url_key.values():
+                sql_command = """
+                   INSERT INTO TypedURLS (User, Name, URL)
+                   VALUES (?,?,?);"""
+
+                data_tuple = (str(user_dir), val.name(), val.value())
+
+                self.cursor.execute(sql_command, data_tuple)
+                self.connection.commit()
 
     def main(self):
         self.sql_setup()
@@ -463,7 +784,7 @@ class PytskInfo():
         self.all_file_analysis()
         self.all_meta()
         self.hash_files()
-
-
-c = PytskInfo("Session2_Image.001", "001")
-c.main()
+        self.file_signatures()
+        ls = set(self.registry_offset)
+        for offset in ls:
+            self.write_registry(offset)
