@@ -3,7 +3,7 @@ Repo for assignment code and documentation
 A digital forensic tool based on FTK and Autopsy, made in Python with a GUI
 
 It can:
-  -Process partitions
+  - Process partitions
   - Analyse file systems
   - Obtain file metadata
   - Carve files
