@@ -9,3 +9,4 @@ It can:
   - Carve files
   - Analyse registry files
   - Verify file hases
+  - Extract EXIF data
